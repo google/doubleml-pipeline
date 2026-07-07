@@ -1,0 +1,216 @@
+# DoubleML Pipeline
+
+A robust Python library for automated causal inference utilizing Double Machine
+Learning (DoubleML) and FLAML AutoML.
+
+**By the Google Decision Science System Team**
+
+*Note: `doubleml-pipeline` refers to and builds upon the underlying `DoubleML`
+Python package published by [doubleml.org](http://doubleml.org).*
+
+--------------------------------------------------------------------------------
+
+> [!IMPORTANT] **Caveat on File Generation:** For verification purposes,
+> currently `doubleml_pipeline` generates CSV files and charts explicitly across
+> the process.
+
+## Why DoubleML Pipeline?
+
+With **DoubleML Pipeline**, you can estimate the true incremental impact and ROI
+of your marketing interventions including pricing and promotions by controlling
+for complex, high-dimensional confounders.
+
+Causal inference is challenging due to confounding bias. Standard regression
+models often fail to isolate true causal relationships. **DoubleML Pipeline**
+solves this by implementing a rigorous Double Machine Learning (DoubleML)
+framework, combining it with automated machine learning (AutoML) to make causal
+estimation both scientifically robust and highly automated.
+
+### Key Features:
+
+*   **Automated Nuisance Modeling**: Automates nuisance parameter estimation
+    using FLAML AutoML. It dynamically searches and tunes candidates (like
+    LightGBM, XGBoost) under a specified time budget, removing the guesswork of
+    model selection.
+*   **Safe Business Unit Scaling**: Normalizes and scales geographical and
+    population data securely, ensuring that descaled results represent accurate
+    real-world business metrics (KPI, ROI) without introducing mathematical
+    singularities.
+*   **Treatment Effect Heterogeneity (CATE)**: Automatically fits continuous
+    splines or binary bases to estimate how treatment effects vary across
+    different contexts (Conditional Average Treatment Effects).
+*   **Sensitivity Analysis (OVB)**: Runs robust omitted variable bias (OVB)
+    checks to evaluate how sensitive your causal estimates are to unobserved
+    confounders.
+*   **Publication-Ready Visualizations**: Generates comprehensive time series
+    line plots, stacked contribution bar charts, cross-sectional ROI
+    comparisons, and prior distribution shapes.
+
+--------------------------------------------------------------------------------
+
+## Getting Started
+
+### Prerequisites
+
+Before running the pipeline, ensure you have:
+
+*   **Python 3.9** or later.
+
+### Installation
+
+You can install the library directly from PyPI:
+
+```bash
+pip install doubleml-pipeline
+```
+
+Alternatively, to install from source:
+
+```bash
+git clone https://github.com/google/doubleml-pipeline.git
+cd doubleml-pipeline
+pip install .
+```
+
+### Quick Start Example
+
+Here is how to initialize and run the causal pipeline in a standard Python
+environment, explicitly configuring all scaling, modeling, and financial
+parameters:
+
+```python
+import pandas as pd
+from doubleml_pipeline.preprocessing.scalers import CausalDataScaler
+from doubleml_pipeline.workflow import CausalWorkflowOrchestrator
+
+# 1. Load your dataset
+df = pd.read_csv("path/to/your/marketing_data.csv")
+
+# 2. Initialize the scaler with explicit scaling strategies per column
+scaler = CausalDataScaler(
+    standardize_cols=["holiday_index", "seasonality_factor"],
+    population_standardize_cols=["competitor_spend"],
+    population_median_normalize_cols=["sales_revenue", "tv_spend"],
+    min_max_cols=["store_count"],
+    median_normalize_cols=["discount_rate"],
+    population_col="geo_population",
+)
+
+# 3. Initialize the orchestrator with all explicit configuration parameters
+orchestrator = CausalWorkflowOrchestrator(
+    # Primary target and treatments
+    y_col="sales_revenue",
+    d_cols=["discount_rate", "coupon_imps"],
+    x_cols_list=[
+        ["holiday_index", "seasonality_factor", "competitor_spend"],
+        ["holiday_index", "seasonality_factor", "competitor_spend"],
+    ],
+    # Nuisance estimation models & cross-validation setup
+    ml_models_y=["lgbm", "xgboost"],
+    ml_models_t=["lgbm", "xgboost"],
+    n_folds_list=[5],
+    output_dir="./causal_results",
+    n_jobs=-1,
+    # Conditional Average Treatment Effect (CATE) specification
+    covariates_for_cate_list=[
+        ["seasonality_factor"],
+        ["seasonality_factor"],
+    ],
+    cate_structure_list=[
+        {"type": "auto_additive", "df": 3, "degree": 2, "include_intercept": False},
+        {"type": "auto_additive", "df": 3, "degree": 2, "include_intercept": False},
+    ],
+    time_budget=30,
+    # Panel data dimensions
+    date_col="date",
+    geo_col="geo",
+    item_col="item",
+    geo_name_col="geo_name",
+    item_name_col="item_name",
+    # Sensitivity analysis (Omitted Variable Bias)
+    run_sensitivity=True,
+    sensitivity_scope=["total", "geo", "item"],
+    # Ground truth validation (set True if ground truth effect columns exist)
+    ground_truth_existence=False,
+    ground_truth_effect_column=None,
+    # Treatment type classification & monetary spend mapping
+    treatment_types={
+        "discount_rate": "percentage",
+        "coupon_imps": "spend",
+    },
+    treatment_spend_cols={
+        "coupon_imps": "coupon_cost",
+    },
+    sales_col="sales_revenue",
+)
+
+# 4. Execute the full 4-phase pipeline (Grid Search -> Shortlist -> Ensemble -> Consolidation)
+orchestrator.run_full_pipeline(
+    df=df,
+    scaler=scaler,
+    top_n=3,
+    n_reps=10,
+)
+```
+
+The orchestrator will execute the models in parallel, select the best
+estimators, run repetitions to calculate robust confidence bounds, perform
+sensitivity checks, and write all dataframes and plot artifacts to the specified
+`./causal_results` directory.
+
+### Important Notes on Outputs & Optimization
+
+1.  **ROI Charts:** ROI charts (`003_promo_roi_by_month` and
+    `004_promo_roi_by_entity`) are generated only if `treatment_types` is set to
+    `"percentage"` or `"impressions"` (requires `treatment_spend_cols`
+    specification). The default value for `treatment_types` is `"spend"`. For
+    `"spend"` treatments, ROI charts will not be generated specifically because
+    they are redundant with the output generated in Phase 4.
+2.  **Optimization:** Currently, optimization calculations can only be performed
+    if `optimize = True` and `simple_optimization = True` with a single
+    treatment. Optimization is not calculated if `simple_optimization = False`
+    because the optimization function is under development and optimization for
+    multiple treatments is not supported yet.
+
+--------------------------------------------------------------------------------
+
+## Engaging with the Project
+
+### Documentation & Examples
+
+*   **API Reference**: For a comprehensive list of modules, classes, and
+    function signatures, refer to the [API Reference](docs/api_reference.md).
+*   **Interactive Sample**: Check out the
+    [Sample Jupyter Notebook](examples/sample_notebook.ipynb) which walks
+    through simulating realistic panel marketing data, engineering lagged
+    features, scaling, running the DML pipeline, and plotting the results.
+
+### Contributing & Feedback
+
+We welcome contributions!
+
+*   **Reporting Issues**: If you encounter bugs or want to request features,
+    please open an issue in the GitHub repository issue tracker.
+*   **Submitting Changes**: Please see `CONTRIBUTING.md` for our guidelines on
+    submitting pull requests.
+
+--------------------------------------------------------------------------------
+
+## References
+
+1.  **Debiased Machine Learning method** Victor Chernozhukov, Denis Chetverikov,
+    Mert Demirer, Esther Duflo, Christian Hansen, Whitney Newey, James Robins.
+    *Double/debiased machine learning for treatment and structural parameters*.
+    [arXiv:1608.00060](https://arxiv.org/abs/1608.00060)
+
+2.  **Hyperparameter Tuning for Causal Inference with Double Machine Learning: A
+    Simulation Study** Martin Spindler, et al.
+    [arXiv:2212.04351](https://arxiv.org/abs/2212.04351)
+
+3.  **Debiased Machine Learning of Conditional Average Treatment Effects and
+    Other Causal Functions** Vira Semenova, Victor Chernozhukov.
+    [arXiv:1702.06240](https://arxiv.org/abs/1702.06240)
+
+4.  **Multiway Cluster Robust Double/Debiased Machine Learning** Harold D.
+    Chiang, Kengo Kato, Yukitoshi Matsushita, Takuya Ishihara.
+    [arXiv:1909.05294](https://arxiv.org/abs/1909.05294)
