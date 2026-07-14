@@ -71,6 +71,7 @@ class CausalWorkflowOrchestrator:
       treatment_types: Optional[Dict[str, str]] = None,
       treatment_spend_cols: Optional[Dict[str, str]] = None,
       sales_col: Optional[str] = None,
+      peak_months: Optional[List[int]] = None,
       optimize: bool = False,
       simple_optimization: bool = True,
       opt_periods: Optional[tuple[Any, Any]] = None,
@@ -148,15 +149,46 @@ class CausalWorkflowOrchestrator:
           self.treatment_spend_cols[d_col] = d_col
     self.sales_col = sales_col
     self.optimize = optimize
-    self.simple_optimization = simple_optimization
+
+    if optimize and not simple_optimization:
+      warnings.warn(
+          "Currently the optimization function "
+          "(simple_optimization = False) is under development. "
+          "Automatically, simple_optimization = True is set.",
+          UserWarning,
+      )
+      self.simple_optimization = True
+    else:
+      self.simple_optimization = simple_optimization
+
     self.opt_periods = opt_periods
+
+    if not isinstance(opt_threshold_roi, (int, float)):
+      raise ValueError("opt_threshold_roi must be a numeric value.")
     self.opt_threshold_roi = opt_threshold_roi
+
     self.opt_other_cost_variables = opt_other_cost_variables or []
+    self.peak_months = (
+        peak_months if peak_months is not None else [3, 7, 11, 12]
+    )
 
   def _validate_treatments(self, df: pd.DataFrame) -> None:
-    """Validates treatment types, percentage bounds, sales_col presence, and target spend columns."""
+    """Validates treatment types, percentage bounds, and required columns.
+
+    Specifically, validates treatment types, percentage bounds, sales_col
+    presence, and target spend columns.
+
+    Args:
+      df: The input dataframe containing the treatment and sales data.
+    """
     for d_col in self.d_cols:
       ttype = self.treatment_types.get(d_col, "spend")
+      if ttype not in ["spend", "impressions", "percentage", "price"]:
+        raise ValueError(
+            f"Invalid treatment_type '{ttype}' for column '{d_col}'. "
+            "treatment_type must be one of: 'spend', 'impressions', "
+            "'percentage', or 'price'."
+        )
       if ttype == "percentage":
         if d_col in df.columns:
           vals = df[d_col].dropna().values
@@ -171,7 +203,7 @@ class CausalWorkflowOrchestrator:
               f" 'sales_col' ('{self.sales_col}') was not provided in"
               " dataframe."
           )
-      elif ttype in ["spend", "impressions"]:
+      elif ttype in ["spend", "impressions", "price"]:
         if d_col in df.columns:
           vals = df[d_col].dropna().values
           if len(vals) > 0 and np.all((vals >= 0.0) & (vals <= 1.0)):
@@ -192,6 +224,85 @@ class CausalWorkflowOrchestrator:
               f"Specified spend column '{target_spend}' for treatment"
               f" '{d_col}' not found in dataframe."
           )
+
+    if self.optimize:
+      treatment_spend_vals = list(self.treatment_spend_cols.values())
+
+      if self.opt_periods and self.date_col in df.columns:
+        try:
+          opt_start = pd.to_datetime(self.opt_periods[0])
+          opt_end = pd.to_datetime(self.opt_periods[1])
+          df_min_date = pd.to_datetime(df[self.date_col].min())
+          df_max_date = pd.to_datetime(df[self.date_col].max())
+          if opt_start > opt_end:
+            warnings.warn(
+                f"opt_periods start ({opt_start}) is after end ({opt_end})."
+                f" Falling back to default date range: {df_min_date} to"
+                f" {df_max_date}.",
+                UserWarning,
+            )
+            self.opt_periods = None
+          elif opt_start < df_min_date or opt_end > df_max_date:
+            warnings.warn(
+                f"opt_periods ({opt_start} to {opt_end}) is outside the"
+                f" available data range ({df_min_date} to {df_max_date})."
+                " Falling back to default date range.",
+                UserWarning,
+            )
+            self.opt_periods = None
+        except (ValueError, TypeError):
+          pass
+
+      if self.opt_other_cost_variables:
+        for col in self.opt_other_cost_variables:
+          if col in self.d_cols:
+            raise ValueError(
+                f"Variable '{col}' in opt_other_cost_variables is also a"
+                " treatment variable (d_cols)."
+            )
+          if col in treatment_spend_vals:
+            raise ValueError(
+                f"Variable '{col}' in opt_other_cost_variables is also in"
+                " treatment_spend_cols."
+            )
+          if col in df.columns:
+            col_lower = col.lower()
+            if any(
+                sub in col_lower
+                for sub in ["impression", "imps", "pct", "percentage"]
+            ):
+              warnings.warn(
+                  f"Variable '{col}' in opt_other_cost_variables has a name"
+                  " suggesting it might not be a cost variable."
+              )
+            else:
+              vals = df[col].dropna().values
+              if len(vals) > 0:
+                if np.all((vals >= 0.0) & (vals <= 1.0)):
+                  warnings.warn(
+                      f"Variable '{col}' in opt_other_cost_variables has values"
+                      " between 0 and 1, suggesting it might not be a cost"
+                      " variable."
+                  )
+                elif np.any(vals < 0.0):
+                  warnings.warn(
+                      f"Variable '{col}' in opt_other_cost_variables contains"
+                      " negative values, suggesting it might not be a cost"
+                      " variable."
+                  )
+
+      for col in df.columns:
+        col_lower = col.lower()
+        if any(sub in col_lower for sub in ["cost", "spend"]):
+          if (
+              col not in treatment_spend_vals
+              and col not in self.opt_other_cost_variables
+          ):
+            warnings.warn(
+                f"Column '{col}' in the dataframe contains 'cost' or 'spend' in"
+                " its name, but is not included in treatment_spend_cols or"
+                " opt_other_cost_variables."
+            )
 
   def _monitor_phase1_progress(
       self,
@@ -1239,9 +1350,20 @@ class CausalWorkflowOrchestrator:
         warnings.warn("Detailed optimization is not yet supported.")
 
     for d_col in self.d_cols:
-      ttype = self.treatment_types[d_col]
-      if ttype in ["percentage", "impressions", "spend"]:
-        financial_spend_col = self.treatment_spend_cols[d_col]
+      ttype = self.treatment_types.get(d_col, "spend")
+
+      if ttype in ["percentage", "impressions", "price"]:
+        financial_spend_col = self.treatment_spend_cols.get(d_col)
+        if not financial_spend_col or not self.sales_col:
+          warnings.warn(
+              f"Skipping ROI output and optimization for treatment '{d_col}'. "
+              f"To conduct these processes when treatment_type is '{ttype}', "
+              "please provide both 'treatment_spend_cols' and 'sales_col'."
+          )
+          continue
+
+      if ttype in ["percentage", "impressions", "spend", "price"]:
+        financial_spend_col = self.treatment_spend_cols.get(d_col)
 
         if (
             financial_spend_col
@@ -1258,7 +1380,9 @@ class CausalWorkflowOrchestrator:
           )
 
           roi_dir = os.path.join(phase4_dir, "roi_output", d_col)
+          opt_out_dir = graph_dir if ttype == "spend" else roi_dir
           if ttype != "spend":
+            print("  ├─ Generating ROI Charts...")
             plots.generate_roi_charts(
                 df_1a_consolidated,
                 self.date_col,
@@ -1267,6 +1391,7 @@ class CausalWorkflowOrchestrator:
                 financial_spend_col,
                 kpi_col,
                 roi_dir,
+                peak_months=self.peak_months,
                 item_col=getattr(self, "item_col", None),
             )
 
@@ -1287,6 +1412,7 @@ class CausalWorkflowOrchestrator:
                 else (min_d, max_d)
             )
 
+            print("  ├─ Generating Optimisation Charts...")
             optimization.optimize(
                 df_1a_consolidated=df_1a_consolidated,
                 treatment=d_col,
@@ -1300,10 +1426,13 @@ class CausalWorkflowOrchestrator:
                 geo_col=self.geo_col,
                 item_col=getattr(self, "item_col", None),
                 sales_col=self.sales_col,
-                out_dir=roi_dir,
+                out_dir=opt_out_dir,
             )
 
           # Updated Prior for roi spend
+          if ttype == "spend":
+            continue
+
           if self.date_col and self.date_col in df_1a_consolidated.columns:
             ts_promo = df_1a_consolidated.groupby(self.date_col).sum()
           else:
@@ -1419,7 +1548,7 @@ class CausalWorkflowOrchestrator:
       )
 
     if self.date_col and self.date_col in df_1a_consolidated.columns:
-      print("  ├─ Generating timeseries & ROI charts...", flush=True)
+      print("  ├─ Generating timeseries charts with CIs...", flush=True)
       plots.plot_incremental_kpi_line(
           df_1a_consolidated,
           self.date_col,

@@ -640,7 +640,7 @@ def plot_sensitivity_contour(
           ' Bound',
           fontsize=18,
       )
-      plt.xlabel('Treatment Partial Variance (cf_d)', fontsize=16)
+      plt.xlabel('Treatment Partial R^2 (cf_d)', fontsize=16)
       plt.ylabel('Outcome Partial R^2 (cf_y)', fontsize=16)
       plt.grid(True, linestyle=':', alpha=0.6)
       plt.legend(loc='upper right', fontsize=14)
@@ -1024,9 +1024,9 @@ def generate_roi_charts(
         ax.plot(
             df_ts[date_col],
             df_ts[spend_col],
-            color='orange',
+            color='purple',
             alpha=0.8,
-            linewidth=2,
+            linewidth=3,
             label=f'Spend ({spend_col})',
         )
       if est_col in df_ts.columns:
@@ -1067,13 +1067,13 @@ def generate_roi_charts(
       )
       plt.close()
 
-      # Chart B (Promo vs Est)
+      # Chart B (Spend vs Est)
       _, ax = plt.subplots(figsize=(24, 10))
       if spend_col in df_ts.columns:
         ax.plot(
             df_ts[date_col],
             df_ts[spend_col],
-            color='orange',
+            color='purple',
             alpha=0.8,
             linewidth=2,
             label=f'Spend ({spend_col})',
@@ -1110,7 +1110,7 @@ def generate_roi_charts(
       plt.subplots_adjust(bottom=0.25)
       plt.tight_layout()
       plt.savefig(
-          os.path.join(dir1, f'{prefix}_timeseries_promo_vs_est.png'), dpi=200
+          os.path.join(dir1, f'{prefix}_timeseries_spend_vs_est.png'), dpi=200
       )
       plt.close()
 
@@ -1187,8 +1187,8 @@ def generate_roi_charts(
           ax.plot(
               sub_ts[date_col],
               sub_ts[spend_col],
-              color='orange',
-              linewidth=2,
+              color='purple',
+              linewidth=3,
               label='Spend',
           )
           ax.plot(
@@ -1265,9 +1265,9 @@ def generate_roi_charts(
       plt.close()
 
   # -------------------------------------------------------------------
-  # 3. Subdir: 003_promo_roi_by_month (Monthly Stats Matrix)
+  # 3. Subdir: 003_roi_by_month (Monthly Stats Matrix)
   # -------------------------------------------------------------------
-  dir3 = os.path.join(out_dir, '003_promo_roi_by_month')
+  dir3 = os.path.join(out_dir, '003_roi_by_month')
   os.makedirs(dir3, exist_ok=True)
 
   if date_col in df_work.columns:
@@ -1410,14 +1410,14 @@ def generate_roi_charts(
 
       plt.tight_layout(rect=[0, 0.03, 1, 0.95])
       plt.savefig(
-          os.path.join(dir3, f'{prefix}_promo_roi_by_month_matrix.png'), dpi=200
+          os.path.join(dir3, f'{prefix}_roi_by_month_matrix.png'), dpi=200
       )
       plt.close()
 
   # -------------------------------------------------------------------
-  # 4. Subdir: 004_promo_roi_by_geo (Geo Stats Matrix)
+  # 4. Subdir: 004_roi_by_geo (Geo Stats Matrix)
   # -------------------------------------------------------------------
-  dir4 = os.path.join(out_dir, '004_promo_roi_by_geo')
+  dir4 = os.path.join(out_dir, '004_roi_by_geo')
   os.makedirs(dir4, exist_ok=True)
 
   if date_col in df_work.columns:
@@ -1561,14 +1561,14 @@ def generate_roi_charts(
 
       plt.tight_layout(rect=[0, 0.03, 1, 0.95])
       plt.savefig(
-          os.path.join(dir4, f'{prefix}_promo_roi_by_geo_matrix.png'), dpi=200
+          os.path.join(dir4, f'{prefix}_roi_by_geo_matrix.png'), dpi=200
       )
       plt.close()
   # -------------------------------------------------------------------
-  # 5. Subdir: 005_promo_roi_by_item (Item Stats Matrix)
+  # 5. Subdir: 005_roi_by_item (Item Stats Matrix)
   # -------------------------------------------------------------------
   if item_col and item_col in df_work.columns:
-    dir5 = os.path.join(out_dir, '005_promo_roi_by_item')
+    dir5 = os.path.join(out_dir, '005_roi_by_item')
     os.makedirs(dir5, exist_ok=True)
 
     if date_col in df_work.columns:
@@ -1710,7 +1710,7 @@ def generate_roi_charts(
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.savefig(
-            os.path.join(dir5, f'{prefix}_promo_roi_by_item_matrix.png'),
+            os.path.join(dir5, f'{prefix}_roi_by_item_matrix.png'),
             dpi=200,
         )
         plt.close()

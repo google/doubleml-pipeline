@@ -3,7 +3,7 @@
 A robust Python library for automated causal inference utilizing Double Machine
 Learning (DoubleML) and FLAML AutoML.
 
-**By the Google Decision Science System Team**
+**By Google's APAC Marketing Effectiveness Taskforce**
 
 *Note: `doubleml-pipeline` refers to and builds upon the underlying `DoubleML`
 Python package published by [doubleml.org](http://doubleml.org).*

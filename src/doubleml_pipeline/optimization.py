@@ -210,9 +210,9 @@ def optimize(
         ax.plot(
             df_ts[date_col],
             df_ts[treatment_amt],
-            color='orange',
+            color='purple',
             alpha=0.8,
-            linewidth=2,
+            linewidth=3,
             label=f'Spend ({treatment_amt})',
         )
       if kpi_col in df_ts.columns:
@@ -229,7 +229,7 @@ def optimize(
           df_ts[date_col],
           green_line,
           color='darkgreen',
-          linewidth=2,
+          linewidth=3,
           label=f'threshold_Spend_roi_{threshold_roi}',
       )
       ax.fill_between(
@@ -257,6 +257,6 @@ def optimize(
       plt.subplots_adjust(bottom=0.25)
       plt.tight_layout()
 
-      out_path = os.path.join(opt_dir, f'{prefix}_timeseries_promo_vs_est.png')
+      out_path = os.path.join(opt_dir, f'{prefix}_timeseries_spend_vs_est.png')
       plt.savefig(out_path, dpi=200)
       plt.close()

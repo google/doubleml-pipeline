@@ -12,7 +12,7 @@ This document outlines the core public classes and functions available in the
 The central manager for orchestrating the DoubleML execution pipeline, handling
 parallelization, model selection, and visual reporting.
 
-#### `__init__(self, y_col, d_cols, x_cols_list, ml_models_y, ml_models_t, n_folds_list, output_dir, n_jobs=-1, covariates_for_cate_list=None, cate_structure_list=None, time_budget=15, date_col=None, geo_col=None, item_col=None, geo_name_col=None, item_name_col=None, run_sensitivity=False, sensitivity_scope=None, ground_truth_existence=False, ground_truth_effect_column=None)`
+#### `__init__(self, y_col, d_cols, x_cols_list, ml_models_y, ml_models_t, n_folds_list, output_dir, n_jobs=-1, covariates_for_cate_list=None, cate_structure_list=None, time_budget=15, date_col=None, geo_col=None, item_col=None, geo_name_col=None, item_name_col=None, run_sensitivity=False, sensitivity_scope=None, ground_truth_existence=False, ground_truth_effect_column=None, treatment_types=None, treatment_spend_cols=None, sales_col=None, peak_months=None, optimize=False, simple_optimization=True, opt_periods=None, opt_threshold_roi=0.0, opt_other_cost_variables=None)`
 
 **Parameters:**
 
@@ -51,7 +51,7 @@ parallelization, model selection, and visual reporting.
     names containing ground truth effects for each treatment variable.
 -   `treatment_types` *(Optional[Dict[str, str]], default=None)*: Treatment type
     classification. Default type is `"spend"`. Note: Phase 4 ROI charts are
-    generated only for `"percentage"` or `"impressions"` (requires
+    generated only for `"percentage"`, `"impressions"`, or `"price"` (requires
     `treatment_spend_cols`). For `"spend"`, they are skipped as they are
     redundant with Phase 5 optimization.
 -   `treatment_spend_cols` *(Optional[Dict[str, str]], default=None)*: Maps
@@ -59,6 +59,9 @@ parallelization, model selection, and visual reporting.
     the treatment itself if type is `"spend"`.
 -   `sales_col` *(Optional[str], default=None)*: Outcome sales column, used for
     calculating ROI and optimization.
+-   `peak_months` *(Optional[List[int]], default=None)*: List of peak months
+    (1-12) to highlight in ROI charts. Defaults to `[3, 7, 11, 12]` if not
+    specified.
 -   `optimize` *(bool, default=False)*: Whether to run the optimization phase
     (Phase 5).
 -   `simple_optimization` *(bool, default=True)*: Currently, optimization is
