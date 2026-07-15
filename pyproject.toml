@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "doubleml-pipeline"
-version = "0.1.0"
+version = "0.1.1"
 description = "A causal inference pipeline utilizing DoubleML and FLAML"
 readme = "README.md"
 requires-python = ">=3.9"
