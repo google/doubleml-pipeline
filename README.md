@@ -6,7 +6,7 @@ Learning (DoubleML) and FLAML AutoML.
 **By Google's APAC Marketing Effectiveness Taskforce**
 
 *Note: `doubleml-pipeline` refers to and builds upon the underlying `DoubleML`
-Python package published by [doubleml.org](http://doubleml.org).*
+Python package published by [doubleml.org](https://docs.doubleml.org).*
 
 --------------------------------------------------------------------------------
 
@@ -80,6 +80,7 @@ parameters:
 
 ```python
 import pandas as pd
+# Note: Module name uses underscores (_) instead of hyphens (-)
 from doubleml_pipeline.preprocessing.scalers import CausalDataScaler
 from doubleml_pipeline.workflow import CausalWorkflowOrchestrator
 
@@ -98,11 +99,10 @@ scaler = CausalDataScaler(
 
 # 3. Initialize the orchestrator with all explicit configuration parameters
 orchestrator = CausalWorkflowOrchestrator(
-    # Primary target and treatments
+    # Primary target and treatments (single treatment to support optimization)
     y_col="sales_revenue",
-    d_cols=["discount_rate", "coupon_imps"],
+    d_cols=["discount_rate"],
     x_cols_list=[
-        ["holiday_index", "seasonality_factor", "competitor_spend"],
         ["holiday_index", "seasonality_factor", "competitor_spend"],
     ],
     # Nuisance estimation models & cross-validation setup
@@ -114,10 +114,8 @@ orchestrator = CausalWorkflowOrchestrator(
     # Conditional Average Treatment Effect (CATE) specification
     covariates_for_cate_list=[
         ["seasonality_factor"],
-        ["seasonality_factor"],
     ],
     cate_structure_list=[
-        {"type": "auto_additive", "df": 3, "degree": 2, "include_intercept": False},
         {"type": "auto_additive", "df": 3, "degree": 2, "include_intercept": False},
     ],
     time_budget=30,
@@ -136,10 +134,9 @@ orchestrator = CausalWorkflowOrchestrator(
     # Treatment type classification & monetary spend mapping
     treatment_types={
         "discount_rate": "percentage",
-        "coupon_imps": "spend",
     },
     treatment_spend_cols={
-        "coupon_imps": "coupon_cost",
+        "discount_rate": "discount_cost",
     },
     sales_col="sales_revenue",
 )
@@ -157,6 +154,13 @@ The orchestrator will execute the models in parallel, select the best
 estimators, run repetitions to calculate robust confidence bounds, perform
 sensitivity checks, and write all dataframes and plot artifacts to the specified
 `./causal_results` directory.
+
+### Pipeline Execution Flow (4 Phases)
+
+1.  **Grid Search Exploration**: Fits nuisance models for outcome `Y` and treatment `T` across all candidate AutoML models and fold combinations in parallel.
+2.  **Shortlisting**: Ranks and selects top-performing models (`top_n`) based on combined error metrics.
+3.  **Robust Ensemble Estimation**: Re-estimates shortlisted models across `n_reps` iterations to build a weighted ensemble with empirical confidence bounds (2.5%–97.5%).
+4.  **Consolidation & Reporting**: Aggregates causal effects (CATE, incremental KPI, ROI), runs OVB sensitivity checks, and outputs charts.
 
 ### Important Notes on Outputs & Optimization
 
@@ -180,10 +184,13 @@ sensitivity checks, and write all dataframes and plot artifacts to the specified
 
 *   **API Reference**: For a comprehensive list of modules, classes, and
     function signatures, refer to the [API Reference](docs/api_reference.md).
+*   **Interactive Sample**: To be added soon.
+<!--
 *   **Interactive Sample**: Check out the
     [Sample Jupyter Notebook](examples/sample_notebook.ipynb) which walks
     through simulating realistic panel marketing data, engineering lagged
     features, scaling, running the DML pipeline, and plotting the results.
+-->
 
 ### Contributing & Feedback
 
@@ -191,7 +198,7 @@ We welcome contributions!
 
 *   **Reporting Issues**: If you encounter bugs or want to request features,
     please open an issue in the GitHub repository issue tracker.
-*   **Submitting Changes**: Please see `CONTRIBUTING.md` for our guidelines on
+*   **Submitting Changes**: Please see [CONTRIBUTING.md](CONTRIBUTING.md) for our guidelines on
     submitting pull requests.
 
 --------------------------------------------------------------------------------
