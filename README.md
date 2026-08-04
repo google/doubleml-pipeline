@@ -162,14 +162,27 @@ sensitivity checks, and write all dataframes and plot artifacts to the specified
 3.  **Robust Ensemble Estimation**: Re-estimates shortlisted models across `n_reps` iterations to build a weighted ensemble with empirical confidence bounds (2.5%–97.5%).
 4.  **Consolidation & Reporting**: Aggregates causal effects (CATE, incremental KPI, ROI), runs OVB sensitivity checks, and outputs charts.
 
+### Output Directory Structure
+
+When the pipeline runs, it saves all intermediate evaluation metrics, candidate
+model repetitions, consolidated datasets, and visualization plots within the
+specified `output_dir` (e.g., `./causal_results/`) as shown below:
+
+![Output Directory Structure](img/output_directory_structure.png)
+
 ### Important Notes on Outputs & Optimization
 
-1.  **ROI Charts:** ROI charts (`003_promo_roi_by_month` and
-    `004_promo_roi_by_entity`) are generated only if `treatment_types` is set to
-    `"percentage"` or `"impressions"` (requires `treatment_spend_cols`
-    specification). The default value for `treatment_types` is `"spend"`. For
-    `"spend"` treatments, ROI charts will not be generated specifically because
-    they are redundant with the output generated in Phase 4.
+1.  **ROI Charts:** Specific ROI charts (`003_promo_roi_by_month` and
+    `004_promo_roi_by_entity`) are conditionally generated depending on your
+    configured `treatment_types` (default is `"spend"`), along with
+    `treatment_spend_cols` and `sales_col`, as summarized below:
+
+    | `treatment_types` | `treatment_spend_cols` & `sales_col` | ROI Charts | Pipeline Behavior & Reason |
+    | :--- | :--- | :--- | :--- |
+    | `"spend"` *(default)* | Not required | **Not Generated** | Not generated specifically because they are redundant with the output generated in Phase 4. |
+    | `"percentage"`, `"impressions"`, or `"price"` | **Provided** | **Generated** | Explicitly generates ROI charts (`003_promo_roi_by_month` and `004_promo_roi_by_entity`). |
+    | `"percentage"`, `"impressions"`, or `"price"` | **Missing** | **Skipped (Warning)** | Pipeline logs a warning and skips ROI charts because monetary spend mapping is missing. |
+
 2.  **Optimization:** Currently, optimization calculations can only be performed
     if `optimize = True` and `simple_optimization = True` with a single
     treatment. Optimization is not calculated if `simple_optimization = False`
