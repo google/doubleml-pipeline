@@ -189,6 +189,14 @@ specified `output_dir` (e.g., `./causal_results/`) as shown below:
     because the optimization function is under development and optimization for
     multiple treatments is not supported yet.
 
+### DML Checklist
+
+The following checklist outlines standard considerations for preparing input
+features, configuring machine learning parameters, and evaluating
+post-estimation results.
+
+![DML Checklist](img/dml_checklist.png)
+
 --------------------------------------------------------------------------------
 
 ## Engaging with the Project
