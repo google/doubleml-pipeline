@@ -20,11 +20,19 @@ With **DoubleML Pipeline**, you can estimate the true incremental impact and ROI
 of your marketing interventions including pricing and promotions by controlling
 for complex, high-dimensional confounders.
 
-Causal inference is challenging due to confounding bias. Standard regression
-models often fail to isolate true causal relationships. **DoubleML Pipeline**
-solves this by implementing a rigorous Double Machine Learning (DoubleML)
-framework, combining it with automated machine learning (AutoML) to make causal
-estimation both scientifically robust and highly automated.
+Causal inference is challenging due to confounding bias, where standard
+regression models often fail to isolate true causal relationships. Furthermore,
+unlike standard supervised learning, Causal Machine Learning (CausalML) lacks
+observational ground truth data for unobserved counterfactuals, making
+**verifiability** a critical requirement for decision-making.
+
+Double Machine Learning (DML) was selected as our base framework because it
+solves these challenges through rigorous theoretical and statistical
+guarantees—such as Neyman orthogonality and cross-fitting to eliminate
+bias—allowing causal estimates to be mathematically verified and trusted.
+**DoubleML Pipeline** operationalizes this framework by combining DML with
+automated machine learning (AutoML) to make causal estimation both
+scientifically robust and highly automated.
 
 ### Key Features:
 
