@@ -197,13 +197,11 @@ specified `output_dir` (e.g., `./causal_results/`) as shown below:
     because the optimization function is under development and optimization for
     multiple treatments is not supported yet.
 
-### DML Checklist
+### User Guide
 
-The following checklist outlines standard considerations for preparing input
-features, configuring machine learning parameters, and evaluating
-post-estimation results.
+For a comprehensive step-by-step walkthrough of pipeline settings, modeling workflows, and visual slide guides, refer to the [User Guide](docs/guide.md).
 
-![DML Checklist](img/dml_checklist.png)
+[![User Guide Sample](img/guide_38.png)](docs/guide.md)
 
 --------------------------------------------------------------------------------
 
@@ -211,6 +209,7 @@ post-estimation results.
 
 ### Documentation & Examples
 
+*   **User Guide**: For a step-by-step walkthrough of pipeline settings and visual slide guides, refer to the [User Guide](docs/guide.md).
 *   **API Reference**: For a comprehensive list of modules, classes, and
     function signatures, refer to the [API Reference](docs/api_reference.md).
 *   **Interactive Sample**: To be added soon.
