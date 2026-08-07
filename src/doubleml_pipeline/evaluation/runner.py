@@ -148,6 +148,23 @@ class DoubleMLPipeline:
       )
 
     model_name = f'{self.ml_y_name}_{self.ml_t_name}_{self.n_folds}_{rep_id}_{self.time_budget}_{len(self.covariates_for_cate)}'
+
+    # Methodological Rationale: Global pre-scaling is mathematically essential
+    # to maintain "Causal Coordinate Invariance".
+    #
+    # Academic Citation: Chernozhukov et al. (2018), Double/debiased machine
+    # learning for treatment and structural parameters, The Econometrics
+    # Journal.
+    #
+    # Context on Leakage: While predictive ML classifies global pre-scaling as
+    # distributional leakage, causal DoubleML requires this global coordinate
+    # system.
+    #
+    # Avoiding Estimation Bias: If scaling parameters ($\mu_k, \sigma_k$) varied
+    # independently across folds, pooling cross-fitted residuals to run the
+    # final CATE regression would mix different coordinate ratios, introducing
+    # severe estimation bias into the physical dollar treatment parameters
+    # ($\theta_0$).
     df_norm = scaler.fit_transform(df_orig)
 
     # FIX: Use DoubleMLClusterData with cluster_cols for robust inference
