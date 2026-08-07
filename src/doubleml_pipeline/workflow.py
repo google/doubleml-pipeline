@@ -15,6 +15,7 @@
 """Module acting as the Orchestrator for the Causal Inference workflow."""
 
 import glob
+import json
 import os
 import re
 import shutil
@@ -37,6 +38,7 @@ from .evaluation import runner
 from .evaluation import selection
 from .preprocessing import scalers
 from .utils import io
+from .visualization import html_extraction
 from .visualization import plots
 
 
@@ -77,6 +79,7 @@ class CausalWorkflowOrchestrator:
       opt_periods: Optional[tuple[Any, Any]] = None,
       opt_threshold_roi: float = 0.0,
       opt_other_cost_variables: Optional[List[str]] = None,
+      generate_html: bool = True,
   ):
     """Initializes the central parameters for orchestration tasks."""
     # Validate parameters
@@ -171,6 +174,7 @@ class CausalWorkflowOrchestrator:
     self.peak_months = (
         peak_months if peak_months is not None else [3, 7, 11, 12]
     )
+    self.generate_html = generate_html
 
   def _validate_treatments(self, df: pd.DataFrame) -> None:
     """Validates treatment types, percentage bounds, and required columns.
@@ -1214,9 +1218,7 @@ class CausalWorkflowOrchestrator:
         "======================================================================"
     )
 
-    phase4_dir = os.path.join(
-        self.output_dir, "step4_phase4_consolidated_results"
-    )
+    phase4_dir = os.path.join(self.output_dir, "step4_consolidated_results")
     graph_dir = os.path.join(phase4_dir, "graph")
     total_graph_dir = os.path.join(graph_dir, "001_total")
     geo_graph_dir = os.path.join(graph_dir, "002_geo")
@@ -1802,6 +1804,81 @@ class CausalWorkflowOrchestrator:
                 RuntimeError,
             ):
               pass
+
+    metadata_path = os.path.join(self.output_dir, "metadata.json")
+
+    date_col_min = (
+        str(df_1a_consolidated[self.date_col].min())
+        if self.date_col and self.date_col in df_1a_consolidated.columns
+        else "N/A"
+    )
+    date_col_max = (
+        str(df_1a_consolidated[self.date_col].max())
+        if self.date_col and self.date_col in df_1a_consolidated.columns
+        else "N/A"
+    )
+    geos = (
+        df_1a_consolidated[self.geo_col].dropna().unique().tolist()
+        if self.geo_col and self.geo_col in df_1a_consolidated.columns
+        else []
+    )
+    items = (
+        df_1a_consolidated[self.item_col].dropna().unique().tolist()
+        if self.item_col and self.item_col in df_1a_consolidated.columns
+        else []
+    )
+    months = []
+    if self.date_col and self.date_col in df_1a_consolidated.columns:
+      months = (
+          pd.to_datetime(df_1a_consolidated[self.date_col])
+          .dt.strftime("%Y-%m")
+          .dropna()
+          .unique()
+          .tolist()
+      )
+
+    gt_metrics_dict = None
+    if self.ground_truth_existence:
+      gt_metrics_dict = {
+          k: float(v) if pd.notnull(v) else None
+          for k, v in total_row_dict.items()
+          if k in ["SMAPE", "R_squared", "MAE", "RMSE"]
+      }
+
+    treatment_spend_totals = {}
+    if getattr(self, "treatment_spend_cols", None):
+      for t, spend_col in self.treatment_spend_cols.items():
+        if spend_col in df_1a_consolidated.columns:
+          treatment_spend_totals[t] = float(df_1a_consolidated[spend_col].sum())
+
+    metadata = {
+        "treatment_cols": self.d_cols,
+        "outcome_col": self.y_col,
+        "date_col_min": date_col_min,
+        "date_col_max": date_col_max,
+        "x_cols_list": self.x_cols_list,
+        "treatment_types": self.treatment_types,
+        "treatment_spend_cols": getattr(self, "treatment_spend_cols", {}),
+        "treatment_spend_totals": treatment_spend_totals,
+        "geo_col": self.geo_col,
+        "item_col": self.item_col,
+        "geos": geos,
+        "items": items,
+        "months": months,
+        "ground_truth_existence": self.ground_truth_existence,
+        "ground_truth_metrics": gt_metrics_dict,
+        "peak_month": self.peak_months,
+        "date_col": self.date_col,
+        "population_col": getattr(scaler, "population_col", None),
+        "opt_threshold_roi": getattr(self, "opt_threshold_roi", None),
+        "optimisation": self.optimize,
+    }
+    with open(metadata_path, "w") as f:
+      json.dump(metadata, f, indent=4)
+
+    if self.generate_html:
+      print("  ├─ Generating HTML Report...", flush=True)
+      html_extraction.generate_html_report(self.output_dir)
 
     print(
         "======================================================================\n★★★"
