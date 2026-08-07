@@ -16,8 +16,10 @@
 
 import unittest
 
-from doubleml_pipeline.preprocessing.features import create_lagged_features
 import pandas as pd
+import pytest
+
+from doubleml_pipeline.preprocessing import features
 
 
 class TestFeatures(unittest.TestCase):
@@ -30,7 +32,7 @@ class TestFeatures(unittest.TestCase):
         "value": [1, 2, 3, 4, 5],
         "geo": ["A", "A", "A", "A", "A"],
     })
-    df_lagged = create_lagged_features(
+    df_lagged = features.create_lagged_features(
         df=df,
         columns=["value"],
         periods=2,
@@ -53,6 +55,25 @@ class TestFeatures(unittest.TestCase):
     # Check NA fill for the first row
     self.assertEqual(df_lagged.iloc[0]["value_l1"], 0.0)
     self.assertEqual(df_lagged.iloc[0]["value_l2"], 0.0)
+
+
+@pytest.mark.parametrize("freq", ["W-MON", "W-FRI", "W-SAT", "W-SUN"])
+def test_create_lagged_features_weekly(freq):
+  """Tests create_lagged_features with various weekly frequencies."""
+  df = pd.DataFrame({
+      "date": pd.date_range(start="2020-01-01", periods=5, freq=freq),
+      "value": [1, 2, 3, 4, 5],
+      "geo": ["A", "A", "A", "A", "A"],
+  })
+  df_lagged = features.create_lagged_features(
+      df=df,
+      columns=["value"],
+      periods=2,
+      date_col="date",
+      unit_col="geo",
+      na_fill=True,
+  )
+  assert not df_lagged.isnull().values.any()
 
 
 if __name__ == "__main__":

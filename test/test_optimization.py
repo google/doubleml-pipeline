@@ -18,8 +18,9 @@ import os
 import unittest
 from unittest import mock
 
-from doubleml_pipeline import optimization
 import pandas as pd
+
+from doubleml_pipeline import optimization
 
 
 class TestOptimization(unittest.TestCase):

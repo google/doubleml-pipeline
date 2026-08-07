@@ -16,8 +16,9 @@
 
 import unittest
 
-from doubleml_pipeline.evaluation import metrics
 import pandas as pd
+
+from doubleml_pipeline.evaluation import metrics
 
 
 class TestMetrics(unittest.TestCase):

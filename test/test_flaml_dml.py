@@ -16,7 +16,9 @@
 
 import unittest
 
-from doubleml_pipeline.models.flaml_dml import FlamlRegressorDoubleML
+import sklearn
+
+from doubleml_pipeline.models import flaml_dml
 
 
 class TestFlamlDML(unittest.TestCase):
@@ -24,7 +26,7 @@ class TestFlamlDML(unittest.TestCase):
 
   def test_initialization(self):
     """Tests FlamlDML initialization."""
-    model = FlamlRegressorDoubleML(
+    model = flaml_dml.FlamlRegressorDoubleML(
         time=10,
         estimator_list=["lgbm"],
         metric="rmse",
@@ -34,6 +36,18 @@ class TestFlamlDML(unittest.TestCase):
     self.assertEqual(model.estimator_list, ["lgbm"])
     self.assertEqual(model.metric, "rmse")
     self.assertEqual(model.random_state, 42)
+
+  def test_clone_without_sharing_mutable_state(self):
+    """Tests that cloned instances do not share mutable state."""
+    model = flaml_dml.FlamlRegressorDoubleML(
+        time=10,
+        estimator_list=["lgbm", "xgboost"],
+        metric="rmse",
+        random_state=42,
+    )
+    cloned_model = sklearn.base.clone(model)
+    self.assertIsNot(model.estimator_list, cloned_model.estimator_list)
+    self.assertEqual(model.estimator_list, cloned_model.estimator_list)
 
 
 if __name__ == "__main__":

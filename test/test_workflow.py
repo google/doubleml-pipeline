@@ -19,9 +19,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from doubleml_pipeline.workflow import CausalWorkflowOrchestrator
 import numpy as np
 import pandas as pd
+
+from doubleml_pipeline import workflow
 
 
 class TestWorkflow(unittest.TestCase):
@@ -33,7 +34,7 @@ class TestWorkflow(unittest.TestCase):
     """Sets up temporary directory and basic orchestrator for tests."""
     super().setUp()
     self.test_dir = tempfile.mkdtemp()
-    self.orchestrator = CausalWorkflowOrchestrator(
+    self.orchestrator = workflow.CausalWorkflowOrchestrator(
         y_col="Y",
         d_cols=["T1"],
         x_cols_list=[["X1", "X2"]],
@@ -147,9 +148,18 @@ class TestWorkflow(unittest.TestCase):
     )
     self.assertEqual(priors, {})
 
-  @mock.patch("doubleml_pipeline.workflow.runner.DoubleMLPipeline")
-  @mock.patch("doubleml_pipeline.workflow.metrics.aggregate_geo_item_metrics")
-  @mock.patch("doubleml_pipeline.workflow.io.save_step1_outputs")
+  @mock.patch(
+      ""
+      "doubleml_pipeline.workflow.runner.DoubleMLPipeline"
+  )
+  @mock.patch(
+      ""
+      "doubleml_pipeline.workflow.metrics.aggregate_geo_item_metrics"
+  )
+  @mock.patch(
+      ""
+      "doubleml_pipeline.workflow.io.save_step1_outputs"
+  )
   def test_run_single_exploration(self, mock_save, mock_agg, mock_pipeline):
     """Tests a single exploration run."""
     # Setup mock returns

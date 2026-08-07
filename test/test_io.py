@@ -17,29 +17,33 @@
 import unittest
 from unittest import mock
 
-from doubleml_pipeline.utils.io import save_step1_outputs
-from doubleml_pipeline.utils.io import save_step2_outputs
 import pandas as pd
+
+from doubleml_pipeline.utils import io
 
 
 class TestIO(unittest.TestCase):
   """Test suite for io functions."""
 
-  @mock.patch("doubleml_pipeline.utils.io.os.makedirs")
+  @mock.patch(
+      "doubleml_pipeline.utils.io.os.makedirs"
+  )
   @mock.patch("pandas.DataFrame.to_csv")
   def test_save_step1_outputs(self, mock_to_csv, mock_makedirs):
     """Tests save_step1_outputs."""
     df = pd.DataFrame({"a": [1, 2]})
-    save_step1_outputs(df, df, df, "test_model", "/tmp/out")
+    io.save_step1_outputs(df, df, df, "test_model", "/tmp/out")
     mock_makedirs.assert_called_with("/tmp/out", exist_ok=True)
     self.assertEqual(mock_to_csv.call_count, 3)
 
-  @mock.patch("doubleml_pipeline.utils.io.os.makedirs")
+  @mock.patch(
+      "doubleml_pipeline.utils.io.os.makedirs"
+  )
   @mock.patch("pandas.DataFrame.to_csv")
   def test_save_step2_outputs(self, mock_to_csv, mock_makedirs):
     """Tests save_step2_outputs."""
     df = pd.DataFrame({"a": [1, 2]})
-    save_step2_outputs(df, "/tmp/out")
+    io.save_step2_outputs(df, "/tmp/out")
     mock_makedirs.assert_called_with("/tmp/out", exist_ok=True)
     self.assertEqual(mock_to_csv.call_count, 1)
 

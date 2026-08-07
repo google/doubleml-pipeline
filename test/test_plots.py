@@ -17,8 +17,9 @@
 import unittest
 from unittest import mock
 
-from doubleml_pipeline.visualization.plots import plot_incremental_kpi_line
 import pandas as pd
+
+from doubleml_pipeline.visualization import plots
 
 
 class TestPlots(unittest.TestCase):
@@ -34,7 +35,7 @@ class TestPlots(unittest.TestCase):
         "upper": [15, 30],
     })
 
-    plot_incremental_kpi_line(
+    plots.plot_incremental_kpi_line(
         df=df,
         date_col="date",
         kpi_col="kpi",

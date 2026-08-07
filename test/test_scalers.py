@@ -16,8 +16,9 @@
 
 import unittest
 
-from doubleml_pipeline.preprocessing.scalers import CausalDataScaler
 import pandas as pd
+
+from doubleml_pipeline.preprocessing import scalers
 
 
 class TestScalers(unittest.TestCase):
@@ -25,7 +26,7 @@ class TestScalers(unittest.TestCase):
 
   def test_causal_data_scaler_fit_transform(self):
     """Tests the fit_transform method of CausalDataScaler."""
-    scaler = CausalDataScaler(
+    scaler = scalers.CausalDataScaler(
         standardize_cols=["value1"],
         population_median_normalize_cols=["value2"],
         population_col="pop",
@@ -48,7 +49,9 @@ class TestScalers(unittest.TestCase):
 
   def test_inverse_transform(self):
     """Tests the inverse_transform_column method of CausalDataScaler."""
-    scaler = CausalDataScaler(standardize_cols=["value1"], population_col="pop")
+    scaler = scalers.CausalDataScaler(
+        standardize_cols=["value1"], population_col="pop"
+    )
     df = pd.DataFrame({"value1": [10, 20, 30], "pop": [1000, 2000, 3000]})
 
     df_scaled = scaler.fit_transform(df)
@@ -56,6 +59,33 @@ class TestScalers(unittest.TestCase):
         df_scaled, "value1", param_source_col="value1"
     )
 
+    self.assertAlmostEqual(df_restored.iloc[0], 10.0, places=5)
+    self.assertAlmostEqual(df_restored.iloc[1], 20.0, places=5)
+    self.assertAlmostEqual(df_restored.iloc[2], 30.0, places=5)
+
+  def test_minmax_scaler_forward_backward(self):
+    """Tests forward and backward passes for MinMax Scaling."""
+    scaler = scalers.CausalDataScaler(
+        min_max_cols=["value1"],
+        population_standardize_cols=["value2"],
+        population_col="pop",
+    )
+    df = pd.DataFrame({
+        "value1": [10, 20, 30],
+        "value2": [100, 200, 300],
+        "pop": [1000, 2000, 3000],
+    })
+
+    # Forward pass
+    df_scaled = scaler.fit_transform(df)
+
+    # Check that _raw_population_ is completely eliminated
+    self.assertNotIn("_raw_population_", df_scaled.columns)
+
+    # Backward pass
+    df_restored = scaler.inverse_transform_column(df_scaled, "value1")
+
+    # mathematically matches original
     self.assertAlmostEqual(df_restored.iloc[0], 10.0, places=5)
     self.assertAlmostEqual(df_restored.iloc[1], 20.0, places=5)
     self.assertAlmostEqual(df_restored.iloc[2], 30.0, places=5)
