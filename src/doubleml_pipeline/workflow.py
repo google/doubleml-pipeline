@@ -138,6 +138,14 @@ class CausalWorkflowOrchestrator:
     self.item_name_col = item_name_col
     self.run_sensitivity = run_sensitivity
     self.sensitivity_scope = sensitivity_scope or ["total"]
+    if "geo" in self.sensitivity_scope and self.geo_col is None:
+      raise ValueError(
+          "geo_col must be specified when sensitivity_scope includes 'geo'."
+      )
+    if "item" in self.sensitivity_scope and self.item_col is None:
+      raise ValueError(
+          "item_col must be specified when sensitivity_scope includes 'item'."
+      )
     self.ground_truth_existence = ground_truth_existence
     self.ground_truth_effect_column = ground_truth_effect_column or []
     self.treatment_types = treatment_types or {}
@@ -408,6 +416,7 @@ class CausalWorkflowOrchestrator:
       gt_col: str,
       df: pd.DataFrame,
       scaler: scalers.CausalDataScaler,
+      process_log: str = "lightweight",
   ) -> Dict[str, Any]:
     """Executes a single structural estimation run across cross-validation folds."""
     # FIX: Extract valid cluster columns for cluster robust inference
@@ -464,6 +473,7 @@ class CausalWorkflowOrchestrator:
         pd.DataFrame([res["metrics_1c"]]),
         res["model_name"],
         out_dir,
+        process_log,
     )
     return res["metrics_1c"]
 
@@ -548,7 +558,9 @@ class CausalWorkflowOrchestrator:
   ) -> Dict[str, float]:
     """Generates shape parameters (mean, standard deviation, alpha, beta) for probabilistic prior matching."""
     if self.date_col and self.date_col in df_1a_consolidated.columns:
-      ts_df = df_1a_consolidated.groupby(self.date_col).sum()
+      ts_df = df_1a_consolidated.groupby(self.date_col, observed=False).sum(
+          numeric_only=True
+      )
     else:
       ts_df = df_1a_consolidated
 
@@ -739,7 +751,7 @@ class CausalWorkflowOrchestrator:
 
     if use_date_agg:
       df_date_agg = df_1a_consolidated.groupby(
-          self.date_col, as_index=False
+          self.date_col, as_index=False, observed=False
       ).sum()
       y_true_ts_tot_all = np.zeros(len(df_date_agg))
       y_pred_ts_tot_all = np.zeros(len(df_date_agg))
@@ -875,6 +887,7 @@ class CausalWorkflowOrchestrator:
       scaler: scalers.CausalDataScaler,
       top_n: int = 5,
       n_reps: int = 20,
+      process_log: str = "lightweight",
   ) -> None:
     """Orchestrates and executes the complete 4-phase DoubleML causal framework modeling sequence."""
     self._validate_treatments(df)
@@ -953,6 +966,7 @@ class CausalWorkflowOrchestrator:
                 gt_col,
                 df,
                 scaler,
+                process_log,
             )
             for t_dict in tasks_p1
         )
@@ -1057,7 +1071,9 @@ class CausalWorkflowOrchestrator:
       )
 
       iteration_summaries = []
-      for m_group, df_group in df_3a_detail.groupby("Model Group"):
+      for m_group, df_group in df_3a_detail.groupby(
+          "Model Group", observed=False
+      ):
         group_results = [
             r
             for r in all_iter_results_for_channel
@@ -1414,7 +1430,7 @@ class CausalWorkflowOrchestrator:
                 else (min_d, max_d)
             )
 
-            print("  ├─ Generating Optimisation Charts...")
+            print("  ├─ Generating Optimization Charts...")
             optimization.optimize(
                 df_1a_consolidated=df_1a_consolidated,
                 treatment=d_col,
@@ -1436,7 +1452,9 @@ class CausalWorkflowOrchestrator:
             continue
 
           if self.date_col and self.date_col in df_1a_consolidated.columns:
-            ts_promo = df_1a_consolidated.groupby(self.date_col).sum()
+            ts_promo = df_1a_consolidated.groupby(
+                self.date_col, observed=False
+            ).sum(numeric_only=True)
           else:
             ts_promo = df_1a_consolidated
 
@@ -1661,7 +1679,9 @@ class CausalWorkflowOrchestrator:
     prior_records = []
 
     if self.date_col and self.date_col in df_1a_consolidated.columns:
-      ts_df = df_1a_consolidated.groupby(self.date_col).sum()
+      ts_df = df_1a_consolidated.groupby(self.date_col, observed=False).sum(
+          numeric_only=True
+      )
     else:
       ts_df = df_1a_consolidated
 
@@ -1759,6 +1779,7 @@ class CausalWorkflowOrchestrator:
 
     if self.run_sensitivity:
       print("  ├─ Running Sensitivity Analysis Contours...", flush=True)
+      sensitivity_records = []
       for idx, d_col in enumerate(self.d_cols):
         dml_model = best_model_data_dict[d_col]["model_obj"]
         benchmarks = (
@@ -1776,7 +1797,7 @@ class CausalWorkflowOrchestrator:
             top_bench = [df[num_bench].corrwith(df[d_col]).abs().idxmax()]
 
         if "total" in self.sensitivity_scope:
-          plots.plot_sensitivity_contour(
+          sens_res = plots.plot_sensitivity_contour(
               dml_model,
               os.path.join(
                   sens_graph_dir, f"{d_col}_total_sensitivity_contour.png"
@@ -1784,26 +1805,59 @@ class CausalWorkflowOrchestrator:
               f"{d_col} (Total)",
               top_bench,
           )
+          if sens_res:
+            sens_res.update({
+                "treatment": d_col,
+                "scope": "total",
+                "group": "Total",
+                "benchmark_covariate": top_bench[0] if top_bench else None,
+            })
+            sensitivity_records.append(sens_res)
+
         for scope, col in [("geo", self.geo_col), ("item", self.item_col)]:
           if scope in self.sensitivity_scope and col in df.columns:
             try:
-              dml_model.gate(groups=pd.get_dummies(df[col], drop_first=True))
-              plots.plot_sensitivity_contour(
-                  dml_model,
-                  os.path.join(
-                      sens_graph_dir, f"{d_col}_{scope}_sensitivity_contour.png"
-                  ),
-                  f"{d_col} ({scope.capitalize()} Level)",
-                  top_bench,
-              )
+              groups = pd.get_dummies(df[col])
+              gate_res = dml_model.gate(groups=groups)
+              for group_idx, group_name in enumerate(groups.columns):
+                safe_name = str(group_name).replace("/", "_").replace("\\", "_")
+                gate_theta = gate_res.coef[group_idx]
+                gate_se = gate_res.se[group_idx]
+
+                sens_res = plots.plot_sensitivity_contour(
+                    dml_model,
+                    os.path.join(
+                        sens_graph_dir,
+                        f"{d_col}_{safe_name}_sensitivity_contour.png",
+                    ),
+                    f"{d_col} ({scope.capitalize()}: {group_name})",
+                    top_bench,
+                    override_theta=gate_theta,
+                    override_se=gate_se,
+                )
+                if sens_res:
+                  sens_res.update({
+                      "treatment": d_col,
+                      "scope": scope,
+                      "group": group_name,
+                      "benchmark_covariate": (
+                          top_bench[0] if top_bench else None
+                      ),
+                  })
+                  sensitivity_records.append(sens_res)
             except (
                 ValueError,
                 KeyError,
                 AttributeError,
                 TypeError,
                 RuntimeError,
-            ):
-              pass
+            ) as e:
+              print(f"    [Warning] Failed GATE sensitivity for {scope}: {e}")
+
+      if sensitivity_records:
+        pd.DataFrame(sensitivity_records).to_csv(
+            os.path.join(sens_graph_dir, "sensitivity_metrics.csv"), index=False
+        )
 
     metadata_path = os.path.join(self.output_dir, "metadata.json")
 
@@ -1871,7 +1925,8 @@ class CausalWorkflowOrchestrator:
         "date_col": self.date_col,
         "population_col": getattr(scaler, "population_col", None),
         "opt_threshold_roi": getattr(self, "opt_threshold_roi", None),
-        "optimisation": self.optimize,
+        "optimization": self.optimize,
+        "sensitivity_scope": getattr(self, "sensitivity_scope", ["total"]),
     }
     with open(metadata_path, "w") as f:
       json.dump(metadata, f, indent=4)

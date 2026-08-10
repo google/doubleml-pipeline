@@ -69,7 +69,7 @@ def optimize(
   kpi_col = f'estimated_incremental_KPI_{treatment}'
 
   # Ensure output directory exists
-  opt_dir = os.path.join(out_dir, '007_optimisation')
+  opt_dir = os.path.join(out_dir, '007_optimization')
   os.makedirs(opt_dir, exist_ok=True)
 
   df_work = df_1a_consolidated.copy()
@@ -104,7 +104,7 @@ def optimize(
       if df_sub.empty:
         continue
 
-      grouped = df_sub.groupby(date_col).sum(numeric_only=True)
+      grouped = df_sub.groupby(date_col, observed=False).sum(numeric_only=True)
       if treatment_amt not in grouped.columns or kpi_col not in grouped.columns:
         continue
 
@@ -118,7 +118,7 @@ def optimize(
       total_cost = grouped[treatment_amt].sum()
       mask = grouped['ROI'] < threshold_roi
       reduction = grouped.loc[mask, treatment_amt].sum()
-      optimised_total = total_cost - reduction
+      optimized_total = total_cost - reduction
 
       total_cost_cv = 0.0
       for cv in other_cost_variables:
@@ -136,7 +136,7 @@ def optimize(
           'periods_end_date': periods[1],
           'threshold_roi': threshold_roi,
           'total_cost_of_treatment_in_periods': total_cost,
-          'optimised_total_cost_of_treatment_in_periods': optimised_total,
+          'optimized_total_cost_of_treatment_in_periods': optimized_total,
           'reduction_of_cost_of_treatment': reduction,
           'total_cost_of_other_cost_variables': total_cost_cv,
           'increase_pct_of_total_cost_of_other_cost_variables': increase_pct,
@@ -186,7 +186,7 @@ def optimize(
         continue
 
       df_ts = (
-          chart_df.groupby(date_col, as_index=False)
+          chart_df.groupby(date_col, as_index=False, observed=False)
           .agg(agg_dict)
           .sort_values(date_col)
       )
@@ -199,8 +199,17 @@ def optimize(
             out=np.zeros_like(df_ts[kpi_col].values, dtype=float),
             where=df_ts[treatment_amt].values != 0,
         )
-        mask = roi >= threshold_roi
-        green_line = np.where(mask, df_ts[treatment_amt].values, 0.0)
+        # Inside the opt_periods
+        in_period_mask = (df_ts[date_col] >= start_date) & (
+            df_ts[date_col] <= end_date
+        )
+        roi_mask = roi >= threshold_roi
+        # green_line is original spend outside opt_periods
+        # OR if threshold is met
+        keep_original_mask = (~in_period_mask) | roi_mask
+        green_line = np.where(
+            keep_original_mask, df_ts[treatment_amt].values, 0.0
+        )
       else:
         continue
 
@@ -230,7 +239,7 @@ def optimize(
           green_line,
           color='darkgreen',
           linewidth=3,
-          label=f'threshold_Spend_roi_{threshold_roi}',
+          label=f'improved_Spend_with_roi_{threshold_roi}',
       )
       ax.fill_between(
           df_ts[date_col],

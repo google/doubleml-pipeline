@@ -24,7 +24,7 @@ def create_lagged_features(
     columns: List[str],
     periods: Union[int, List[int]],
     date_col: str,
-    unit_col: Optional[str] = None,
+    unit_col: Optional[Union[str, List[str]]] = None,
     na_fill: bool = False,
 ) -> pd.DataFrame:
   """Creates lagged features for specified columns in the dataframe.
@@ -61,8 +61,11 @@ def create_lagged_features(
 
   # 1. Sort the dataframe securely
   row_sort_keys = []
-  if unit_col and unit_col in df_out.columns:
-    row_sort_keys.append(unit_col)
+  if unit_col:
+    unit_cols = [unit_col] if isinstance(unit_col, str) else unit_col
+    for col_name in unit_cols:
+      if col_name in df_out.columns:
+        row_sort_keys.append(col_name)
   row_sort_keys.append(date_col)
 
   df_out = df_out.sort_values(by=row_sort_keys)
@@ -81,8 +84,13 @@ def create_lagged_features(
   )
 
   for col in columns:
-    if unit_col and unit_col in df_out.columns:
-      idx_arrays = [df_out[unit_col], temp_date]
+    present_unit_cols = []
+    if unit_col:
+      unit_cols = [unit_col] if isinstance(unit_col, str) else unit_col
+      present_unit_cols = [c for c in unit_cols if c in df_out.columns]
+
+    if present_unit_cols:
+      idx_arrays = [df_out[c] for c in present_unit_cols] + [temp_date]
       lookup = pd.Series(
           df_out[col].values, index=pd.MultiIndex.from_arrays(idx_arrays)
       )
@@ -96,8 +104,10 @@ def create_lagged_features(
       lag_col_name = f"{col}_l{p}"
       target_date = temp_date - (p * period_delta)
 
-      if unit_col and unit_col in df_out.columns:
-        target_idx = pd.MultiIndex.from_arrays([df_out[unit_col], target_date])
+      if present_unit_cols:
+        target_idx = pd.MultiIndex.from_arrays(
+            [df_out[c] for c in present_unit_cols] + [target_date]
+        )
       else:
         target_idx = target_date
 

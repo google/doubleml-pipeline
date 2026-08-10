@@ -48,7 +48,7 @@ class TestOptimization(unittest.TestCase):
     )
 
     self.assertTrue(
-        os.path.exists("/tmp/007_optimisation/optimization_metrics.csv")
+        os.path.exists("/tmp/007_optimization/optimization_metrics.csv")
     )
     mock_savefig.assert_called()
 

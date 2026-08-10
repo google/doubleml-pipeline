@@ -75,7 +75,8 @@ def generate_html_report(output_dir: str) -> str | None:
     peak_month = [3, 7, 11, 12]
   ground_truth_existence = metadata.get("ground_truth_existence", False)
   ground_truth_metrics = metadata.get("ground_truth_metrics")
-  optimisation = metadata.get("optimisation", True)
+  optimization = metadata.get("optimization", True)
+  sensitivity_scope = metadata.get("sensitivity_scope", ["total"])
 
   summary_csv_path = os.path.join(
       output_dir,
@@ -108,7 +109,7 @@ def generate_html_report(output_dir: str) -> str | None:
       output_dir,
       "step4_consolidated_results",
       "graph",
-      "007_optimisation",
+      "007_optimization",
       "optimization_metrics.csv",
   )
 
@@ -151,7 +152,7 @@ def generate_html_report(output_dir: str) -> str | None:
     if is_all_other_treatment:
       if ch == "Total":
         if dim_col and df_1a is not None and dim_col in df_1a.columns:
-          val_df = df_1a[df_1a[dim_col] == dim_val]
+          val_df = df_1a[df_1a[dim_col].astype(str) == str(dim_val)]
           for s_col in treatment_spend_cols.values():
             if s_col in val_df.columns:
               input_spend += float(val_df[s_col].sum())
@@ -160,7 +161,7 @@ def generate_html_report(output_dir: str) -> str | None:
       else:
         s_col = treatment_spend_cols.get(ch)
         if dim_col and df_1a is not None and dim_col in df_1a.columns:
-          val_df = df_1a[df_1a[dim_col] == dim_val]
+          val_df = df_1a[df_1a[dim_col].astype(str) == str(dim_val)]
           if s_col and s_col in val_df.columns:
             input_spend = float(val_df[s_col].sum())
         else:
@@ -205,37 +206,31 @@ def generate_html_report(output_dir: str) -> str | None:
         model_groups = (
             non_total_rows.get("Model Group", pd.Series())
             .dropna()
-            .unique()
             .tolist()
         )
         covariates_for_cate = (
             non_total_rows.get("covariates_for_cate", pd.Series())
             .dropna()
-            .unique()
             .tolist()
         )
         cate_structure = (
             non_total_rows.get("cate_structure", pd.Series())
             .dropna()
-            .unique()
             .tolist()
         )
         cate_df = (
             non_total_rows.get("cate_df", pd.Series())
             .dropna()
-            .unique()
             .tolist()
         )
         cate_degree = (
             non_total_rows.get("cate_degree", pd.Series())
             .dropna()
-            .unique()
             .tolist()
         )
         cate_intercept = (
             non_total_rows.get("cate_intercept", pd.Series())
             .dropna()
-            .unique()
             .tolist()
         )
   except (
@@ -307,6 +302,16 @@ def generate_html_report(output_dir: str) -> str | None:
   for i in items:
     dim_opts += f"<option value='item:{i}'>item:{i}</option>"
 
+  sens_dim_opts = ""
+  if "total" in sensitivity_scope:
+    sens_dim_opts += "<option value='total'>Total</option>"
+  if "geo" in sensitivity_scope:
+    for g in geos:
+      sens_dim_opts += f"<option value='geo:{g}'>geo:{g}</option>"
+  if "item" in sensitivity_scope:
+    for i in items:
+      sens_dim_opts += f"<option value='item:{i}'>item:{i}</option>"
+
   geo_opts = "".join([f"<option value='{g}'>{g}</option>" for g in geos])
   if geos:
     geo_opts = "<option value='total'>Total</option>" + geo_opts
@@ -352,14 +357,14 @@ def generate_html_report(output_dir: str) -> str | None:
 
   if is_all_other_treatment:
     header_metrics = (
-        f"Input (treatment): {total_input} | "
-        f"Input (treatment spend): {int(round(total_input_spend))} | "
-        f"Incremental KPI: {total_kpi} | "
+        f"Input (treatment): {total_input:,} | "
+        f"Input (treatment spend): {int(round(total_input_spend)):,} | "
+        f"Incremental KPI: {total_kpi:,} | "
         f"ROI (incremental KPI / treatment spend): {total_roi:.2f}"
     )
   else:
     header_metrics = (
-        f"Input: {total_input} | Incremental KPI: {total_kpi} | "
+        f"Input: {total_input:,} | Incremental KPI: {total_kpi:,} | "
         f"ROI: {total_roi:.2f}"
     )
 
@@ -394,7 +399,7 @@ def generate_html_report(output_dir: str) -> str | None:
                 round(
                     float(
                         row.get(
-                            "optimised_total_cost_of_treatment_in_periods", 0
+                            "optimized_total_cost_of_treatment_in_periods", 0
                         )
                     )
                 )
@@ -426,7 +431,7 @@ def generate_html_report(output_dir: str) -> str | None:
           "step4_consolidated_results",
           "roi_output",
           t,
-          "007_optimisation",
+          "007_optimization",
           "optimization_metrics.csv",
       )
       trt_opt_metrics[t] = extract_opt_metrics(path)
@@ -458,14 +463,14 @@ def generate_html_report(output_dir: str) -> str | None:
         select {{ font-size: 16px; padding: 5px; margin-right: 10px; border: 1px solid #2e7d32; color: #2e7d32; border-radius: 4px; }}
         .chart-img {{ max-width: 100%; height: auto; margin-top: 15px; cursor: zoom-in; border: 1px solid #e8f5e9; border-radius: 4px; transition: transform 0.2s; }}
         .chart-img:hover {{ box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
-        
+
         .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); }}
         .modal-content {{ margin: auto; display: block; max-width: 90%; max-height: 90%; margin-top: 2%; }}
         .close {{ position: absolute; top: 15px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }}
     </style>
 </head>
 <body>
-    
+
     <div id="imageModal" class="modal" onclick="this.style.display='none'">
       <span class="close">&times;</span>
       <img class="modal-content" id="expandedImg">
@@ -507,7 +512,7 @@ def generate_html_report(output_dir: str) -> str | None:
         <button class="tab-button" onclick="openTab(event, 'tab_006_sensitivity')">006_sensitivity</button>
 """
   if has_spend:
-    html += """        <button class="tab-button" onclick="openTab(event, 'tab_007_optimisation')">007_optimisation</button>\n"""
+    html += """        <button class="tab-button" onclick="openTab(event, 'tab_007_optimization')">007_optimization</button>\n"""
 
   if has_other_treatment:
     for t, ttype in treatment_types.items():
@@ -519,7 +524,7 @@ def generate_html_report(output_dir: str) -> str | None:
         <button class="tab-button" onclick="openTab(event, 'tab_{t}_roi_output_004')">roi_output_004_roi_by_geo ({t})</button>
         <button class="tab-button" onclick="openTab(event, 'tab_{t}_roi_output_005')">roi_output_005_roi_by_item ({t})</button>
         <button class="tab-button" onclick="openTab(event, 'tab_{t}_roi_output_006')">roi_output_006_updated_prior ({t})</button>
-        <button class="tab-button" onclick="openTab(event, 'tab_{t}_roi_output_007')">roi_output_007_optimisation ({t})</button>
+        <button class="tab-button" onclick="openTab(event, 'tab_{t}_roi_output_007')">roi_output_007_optimization ({t})</button>
 """
 
   html += """    </div>\n\n"""
@@ -620,9 +625,17 @@ def generate_html_report(output_dir: str) -> str | None:
   html += f"""
     <div id="tab_006_sensitivity" class="tab-content">
         <h3>Sensitivity Analysis</h3>
-        <select id="sel_006_trt" onchange="updateImgByPath('img_006', 'step4_consolidated_results/graph/006_sensitivity/' + this.value + '_total_sensitivity_contour.png')">
+        <select id="sel_006_trt" onchange="updateImgSens006()">
             {treatment_opts}
         </select>
+"""
+  if "geo" in sensitivity_scope or "item" in sensitivity_scope:
+    html += f"""
+        <select id="sel_006_dim" onchange="updateImgSens006()">
+            {sens_dim_opts}
+        </select>
+"""
+  html += """
         <br>
         <img id="img_006" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
     </div>
@@ -630,15 +643,15 @@ def generate_html_report(output_dir: str) -> str | None:
 
   if has_spend:
     html += """
-    <div id="tab_007_optimisation" class="tab-content">
-        <h3>Optimisation</h3>
+    <div id="tab_007_optimization" class="tab-content">
+        <h3>Optimization</h3>
 """
     if len(treatment_cols) > 1:
       html += (
           "<p>Optimization for multiple treatments is currently not available"
           " in doubleml-pipeline.</p>\n"
       )
-    elif not optimisation:
+    elif not optimization:
       html += (
           "<p>Optimization is skipped because 'optimize' is set to False.</p>\n"
       )
@@ -741,7 +754,7 @@ def generate_html_report(output_dir: str) -> str | None:
 """
         html += f"""
     <div id="tab_{t}_roi_output_007" class="tab-content">
-        <h3>ROI Output 007: Optimisation ({t})</h3>
+        <h3>ROI Output 007: Optimization ({t})</h3>
         <select id="sel_{t}_007_dim" onchange="updateImgOpt007('{t}')">
             {dim_opts}
         </select>
@@ -777,9 +790,9 @@ def generate_html_report(output_dir: str) -> str | None:
             if (summaryMetrics[key]) {{
                 var m = summaryMetrics[key];
                 if (isAllOtherTreatment) {{
-                    html += "<p><strong>Input (treatment):</strong> " + m.input + " | <strong>Input (treatment spend):</strong> " + m.input_spend + " | <strong>Incremental KPI:</strong> " + m.kpi + " | <strong>ROI (incremental KPI / treatment spend):</strong> " + m.roi + "</p>";
+                    html += "<p><strong>Input (treatment):</strong> " + Number(m.input).toLocaleString('en-US') + " | <strong>Input (treatment spend):</strong> " + Number(m.input_spend).toLocaleString('en-US') + " | <strong>Incremental KPI:</strong> " + Number(m.kpi).toLocaleString('en-US') + " | <strong>ROI (incremental KPI / treatment spend):</strong> " + m.roi + "</p>";
                 }} else {{
-                    html += "<p><strong>Input:</strong> " + m.input + " | <strong>Incremental KPI:</strong> " + m.kpi + " | <strong>ROI:</strong> " + m.roi + "</p>";
+                    html += "<p><strong>Input:</strong> " + Number(m.input).toLocaleString('en-US') + " | <strong>Incremental KPI:</strong> " + Number(m.kpi).toLocaleString('en-US') + " | <strong>ROI:</strong> " + m.roi + "</p>";
                 }}
             }}
 
@@ -807,10 +820,10 @@ def generate_html_report(output_dir: str) -> str | None:
             var html = '';
             if (optMetricsData[t] && optMetricsData[t][dim]) {{
                 var m = optMetricsData[t][dim];
-                html += "<p><strong>Optimisation ROI Threshold:</strong> " + optThresholdRoi + "<br>";
-                html += "<strong>Optimisation Period:</strong> " + m.start + " - " + m.end + "<br>";
+                html += "<p><strong>Optimization ROI Threshold:</strong> " + optThresholdRoi + "<br>";
+                html += "<strong>Optimization Period:</strong> " + m.start + " - " + m.end + "<br>";
                 html += "<strong>Total Cost of Treatment in the Period:</strong> " + m.cost + "<br>";
-                html += "<strong>Optimised Total Cost of Treatment in the Period:</strong> " + m.opt_cost + "<br>";
+                html += "<strong>Optimized Total Cost of Treatment in the Period:</strong> " + m.opt_cost + "<br>";
                 html += "<strong>Reduction of Cost of Treatment:</strong> " + m.reduction + "<br>";
                 html += "<strong>Other Cost Variables:</strong> " + m.other_vars + "<br>";
                 html += "<strong>Total Cost of Other Cost Variables:</strong> " + m.other_cost + "<br>";
@@ -888,7 +901,7 @@ def generate_html_report(output_dir: str) -> str | None:
             var sel = document.getElementById('sel_007_dim');
             if (!sel) return;
             var dim = sel.value;
-            var path = 'step4_consolidated_results/graph/007_optimisation/';
+            var path = 'step4_consolidated_results/graph/007_optimization/';
             if (dim === 'total') {{
                 path += 'total_timeseries_spend_vs_est.png';
             }} else if (dim.startsWith('geo:')) {{
@@ -898,6 +911,23 @@ def generate_html_report(output_dir: str) -> str | None:
             }}
             updateImgByPath('img_007', path);
             renderOptMetrics('opt_metrics_007_main', 'main', dim);
+        }}
+
+        function updateImgSens006() {{
+            var trt = document.getElementById('sel_006_trt').value;
+            var dimSel = document.getElementById('sel_006_dim');
+            var dim = dimSel ? dimSel.value : 'total';
+            var safe_dim = dim.replace(/\\//g, '_').replace(/\\\\/g, '_');
+
+            var scopeStr = 'total';
+            if (safe_dim.startsWith('geo:')) {{
+                scopeStr = safe_dim.substring(4);
+            }} else if (safe_dim.startsWith('item:')) {{
+                scopeStr = safe_dim.substring(5);
+            }}
+
+            var path = 'step4_consolidated_results/graph/006_sensitivity/' + trt + '_' + scopeStr + '_sensitivity_contour.png';
+            updateImgByPath('img_006', path);
         }}
 
         function updateImgOpt001(t) {{
@@ -970,7 +1000,7 @@ def generate_html_report(output_dir: str) -> str | None:
 
         function updateImgOpt007(t) {{
             var dim = document.getElementById('sel_' + t + '_007_dim').value;
-            var path = 'step4_consolidated_results/roi_output/' + t + '/007_optimisation/';
+            var path = 'step4_consolidated_results/roi_output/' + t + '/007_optimization/';
             if (dim === 'total') {{
                 path += 'total_timeseries_spend_vs_est.png';
             }} else if (dim.startsWith('geo:')) {{
@@ -995,7 +1025,7 @@ def generate_html_report(output_dir: str) -> str | None:
             if(document.getElementById('sel_003_fmt')) updateImg003();
             if(document.getElementById('sel_006_trt')) {{ var sel = document.getElementById('sel_006_trt'); sel.onchange(); }}
             if(document.getElementById('sel_007_geo')) {{ updateImgOpt007_main(); }}
-            
+
             var selects = document.getElementsByTagName('select');
             for(var i=0; i<selects.length; i++) {{
                 if (selects[i].id.indexOf('sel_') === 0 && selects[i].onchange) {{

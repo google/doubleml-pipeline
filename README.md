@@ -214,6 +214,7 @@ For a comprehensive step-by-step walkthrough of pipeline settings, modeling work
     function signatures, refer to the [API Reference](docs/api_reference.md).
 *   **Interactive Sample**: To be added soon.
 <!--
+
 *   **Interactive Sample**: Check out the
     [Sample Jupyter Notebook](examples/sample_notebook.ipynb) which walks
     through simulating realistic panel marketing data, engineering lagged
@@ -240,7 +241,7 @@ We welcome contributions!
 
 2.  **Hyperparameter Tuning for Causal Inference with Double Machine Learning: A
     Simulation Study** Martin Spindler, et al.
-    [arXiv:2212.04351](https://arxiv.org/abs/2212.04351)
+    [arXiv:2402.04674](https://arxiv.org/abs/2402.04674)
 
 3.  **Debiased Machine Learning of Conditional Average Treatment Effects and
     Other Causal Functions** Vira Semenova, Victor Chernozhukov.
@@ -248,4 +249,4 @@ We welcome contributions!
 
 4.  **Multiway Cluster Robust Double/Debiased Machine Learning** Harold D.
     Chiang, Kengo Kato, Yukitoshi Matsushita, Takuya Ishihara.
-    [arXiv:1909.05294](https://arxiv.org/abs/1909.05294)
+    [arXiv:1909.03489](https://arxiv.org/abs/1909.03489)

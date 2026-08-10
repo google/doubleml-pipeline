@@ -151,6 +151,10 @@ def aggregate_geo_item_metrics(
 
     return pd.Series(res)
 
-  df_agg = df.groupby(group_cols).apply(_compute_metrics).reset_index()
+  df_agg = (
+      df.groupby(group_cols, observed=True)
+      .apply(_compute_metrics)
+      .reset_index()
+  )
   df_agg.insert(0, 'model', model_name)
   return df_agg

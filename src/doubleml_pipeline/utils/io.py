@@ -26,6 +26,7 @@ def save_step1_outputs(
     df_1c: pd.DataFrame,
     model_name: str,
     out_dir: str,
+    process_log: str = "lightweight",
 ) -> None:
   """Saves outputs generated during Step 1 of the causal evaluation.
 
@@ -35,11 +36,13 @@ def save_step1_outputs(
     df_1c: The evaluation metrics summary dataset.
     model_name: Name identifier for the model.
     out_dir: Output directory where the results should be saved.
+    process_log: Log level. If 'lightweight', skip generating 1a_full_df.
   """
   os.makedirs(out_dir, exist_ok=True)
-  df_1a.to_csv(
-      os.path.join(out_dir, f"1a_full_df_{model_name}.csv"), index=False
-  )
+  if process_log != "lightweight":
+    df_1a.to_csv(
+        os.path.join(out_dir, f"1a_full_df_{model_name}.csv"), index=False
+    )
   df_1b.to_csv(
       os.path.join(out_dir, f"1b_geo_item_{model_name}.csv"), index=False
   )

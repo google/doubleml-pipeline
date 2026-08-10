@@ -124,7 +124,9 @@ def plot_incremental_kpi_line(
     agg_cols.append(actual_y_col)
 
   df_plot = (
-      df.groupby(date_col, as_index=False)[agg_cols].sum().sort_values(date_col)
+      df.groupby(date_col, as_index=False, observed=False)[agg_cols]
+      .sum()
+      .sort_values(date_col)
   )
   df_plot[date_col] = pd.to_datetime(df_plot[date_col])
 
@@ -202,7 +204,9 @@ def plot_incremental_kpi_bar_stacked(
     agg_cols.append(actual_y_col)
 
   df_plot = (
-      df.groupby(date_col, as_index=False)[agg_cols].sum().sort_values(date_col)
+      df.groupby(date_col, as_index=False, observed=False)[agg_cols]
+      .sum()
+      .sort_values(date_col)
   )
   df_plot[date_col] = pd.to_datetime(df_plot[date_col])
 
@@ -282,7 +286,9 @@ def plot_roi_timeseries_bar(
   if gt_col and gt_col in df.columns:
     agg_cols.append(gt_col)
   df_plot = (
-      df.groupby(date_col, as_index=False)[agg_cols].sum().sort_values(date_col)
+      df.groupby(date_col, as_index=False, observed=False)[agg_cols]
+      .sum()
+      .sort_values(date_col)
   )
   df_plot[date_col] = pd.to_datetime(df_plot[date_col])
 
@@ -391,7 +397,7 @@ def plot_entity_roi_comparison(
   if gt_col and gt_col in df.columns:
     agg_cols.append(gt_col)
   df_plot = (
-      df.groupby(entity_col, as_index=False)[agg_cols]
+      df.groupby(entity_col, as_index=False, observed=False)[agg_cols]
       .sum()
       .sort_values(entity_col)
   )
@@ -410,7 +416,6 @@ def plot_entity_roi_comparison(
   fig.suptitle(title, fontsize=32, y=0.99)
 
   axes[0].bar(entities, inputs, color='steelblue')
-  axes[0].axhline(total_input, color='red', linestyle='--', label='Total Input')
   axes[0].set_ylabel('Total Input', fontsize=22)
 
   axes[1].bar(
@@ -420,9 +425,6 @@ def plot_entity_roi_comparison(
       capsize=4,
       color='mediumseagreen',
       error_kw={'alpha': 0.5},
-  )
-  axes[1].axhline(
-      total_kpi, color='red', linestyle='--', label='Total Est. KPI'
   )
   axes[1].set_ylabel('Incremental KPI', fontsize=22)
 
@@ -480,7 +482,6 @@ def plot_entity_roi_comparison(
     )
 
     ax.tick_params(axis='y', labelsize=16)
-    ax.legend(loc='upper right', fontsize=14)
 
   if gt_col and gt_col in df_plot.columns:
     gt_kpis = df_plot[gt_col].values
@@ -499,9 +500,6 @@ def plot_entity_roi_comparison(
         linewidth=2,
         label='Ground Truth KPI',
     )
-    axes[1].axhline(
-        total_gt_kpi, color='blue', linestyle=':', label='Total GT KPI'
-    )
     axes[2].plot(
         entities,
         gt_rois,
@@ -514,9 +512,11 @@ def plot_entity_roi_comparison(
     axes[2].axhline(
         total_gt_roi, color='blue', linestyle=':', label='Overall GT ROI'
     )
-    axes[1].legend(loc='upper right', fontsize=14)
-    axes[2].legend(loc='upper right', fontsize=14)
     _add_metrics_box(axes[1], df_plot, kpi_col, gt_col)
+
+  for ax in axes:
+    if ax.get_legend_handles_labels()[0]:
+      ax.legend(loc='upper right', fontsize=14)
 
   plt.tight_layout(rect=[0, 0.08, 1, 0.94])
   plt.savefig(out_path, dpi=200)
@@ -528,6 +528,8 @@ def plot_sensitivity_contour(
     out_path: str,
     title: str,
     benchmark_covariates: Optional[List[str]] = None,
+    override_theta: Optional[float] = None,
+    override_se: Optional[float] = None,
 ):
   """Plots sensitivity contour lines for partial linear regression treatment effect analysis."""
   try:
@@ -537,8 +539,10 @@ def plot_sensitivity_contour(
           cf_y=0.03, cf_d=0.03, rho=1.0, level=0.95, null_hypothesis=0.0
       )
 
-      theta = dml_model.coef[0]
-      se = dml_model.se[0]
+      theta = (
+          override_theta if override_theta is not None else dml_model.coef[0]
+      )
+      se = override_se if override_se is not None else dml_model.se[0]
       m_val = np.abs(theta) - 1.96 * se
       rv = 0
       if m_val > 0:
@@ -664,8 +668,17 @@ def plot_sensitivity_contour(
       plt.tight_layout()
       plt.savefig(out_path, dpi=200)
       plt.close()
+
+      return {
+          'theta': theta,
+          'se': se,
+          'robustness_value': rv,
+          'benchmark_cf_d': bx,
+          'benchmark_cf_y': by,
+      }
   except (ValueError, KeyError, AttributeError, TypeError, RuntimeError) as e:
     print(f'    [Warning] Contour generation skipped for {title}: {e}')
+    return None
 
 
 def plot_cate_scatter_matrix(
@@ -1004,7 +1017,7 @@ def generate_roi_charts(
         continue
 
       df_ts = (
-          chart_df.groupby(date_col, as_index=False)
+          chart_df.groupby(date_col, as_index=False, observed=False)
           .agg(agg_dict)
           .sort_values(date_col)
       )
@@ -1172,7 +1185,7 @@ def generate_roi_charts(
             continue
 
           sub_ts = (
-              sub_df.groupby(date_col, as_index=False)
+              sub_df.groupby(date_col, as_index=False, observed=False)
               .agg(matrix_agg_dict)
               .sort_values(date_col)
           )
@@ -1310,7 +1323,9 @@ def generate_roi_charts(
         m_est = np.zeros(12)
 
         if not year_df.empty:
-          m_agg = year_df.groupby(year_df[date_col].dt.month).agg({
+          m_agg = year_df.groupby(
+              year_df[date_col].dt.month, observed=False
+          ).agg({
               sales_col: 'sum',
               spend_col: 'sum',
               est_col: 'sum',
@@ -1450,7 +1465,7 @@ def generate_roi_charts(
         year_df = month_df[month_df[date_col].dt.year == y]
         if geo_col and geo_col in year_df.columns:
           geo_agg = (
-              year_df.groupby(geo_col, as_index=False)
+              year_df.groupby(geo_col, as_index=False, observed=False)
               .agg({sales_col: 'sum', spend_col: 'sum', est_col: 'sum'})
               .sort_values(geo_col)
           )
@@ -1600,7 +1615,7 @@ def generate_roi_charts(
         for row_idx, y in enumerate(years):
           year_df = month_df[month_df[date_col].dt.year == y]
           item_agg = (
-              year_df.groupby(item_col, as_index=False)
+              year_df.groupby(item_col, as_index=False, observed=False)
               .agg({sales_col: 'sum', spend_col: 'sum', est_col: 'sum'})
               .sort_values(item_col)
           )

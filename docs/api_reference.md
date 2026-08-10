@@ -16,83 +16,94 @@ parallelization, model selection, and visual reporting.
 
 **Parameters:**
 
--   `y_col` *(str)*: The outcome variable column name.
--   `d_cols` *(List[str])*: List of treatment variable column names.
+-   `y_col` *(str)*: The outcome variable column name. Example: `'sales'`.
+-   `d_cols` *(List[str])*: List of treatment variable column names. Example: `['discount_rate', 'tv_spend']`.
 -   `x_cols_list` *(List[List[str]])*: List of confounding variables
-    corresponding to each treatment variable.
+    corresponding to each treatment variable. Example:
+    `[['seasonality', 'competitor_price'], ['seasonality', 'macro_indicator']]`.
 -   `ml_models_y` *(List[str])* / `ml_models_t` *(List[str])*: Candidate models
-    for AutoML (e.g., `['lgbm', 'xgboost']`).
+    for AutoML. Example: `['lgbm', 'xgboost', 'rf']`.
 -   `n_folds_list` *(List[int])*: Candidate fold numbers for cross-fitting.
+    Example: `[5, 10]`.
 -   `output_dir` *(str)*: Path to the directory where results and artifacts will
-    be saved.
+    be saved. Example: `'./results/causal_output/'`.
 -   `n_jobs` *(int, default=-1)*: Number of parallel jobs. `-1` uses all
-    available CPU cores.
+    available CPU cores. Example: `-1` or `4`.
 -   `covariates_for_cate_list` *(Optional[List[List[str]]])*: Variables to
-    estimate Conditional Average Treatment Effects (CATE).
+    estimate Conditional Average Treatment Effects (CATE). Example:
+    `[['geo_region'], ['store_type']]`.
 -   `cate_structure_list` *(Optional[List[Any]])*: Specifies the CATE functional
-    form (e.g., `'auto_additive'`).
+    form. Example: `['auto_additive', 'auto_additive']`.
 -   `time_budget` *(int, default=15)*: Time limit in seconds for FLAML AutoML
-    tuning per model.
--   `date_col` *(Optional[str])*: Date column name.
--   `geo_col` *(Optional[str])*: Geography column name.
--   `item_col` *(Optional[str])*: Item column name.
+    tuning per model. Example: `30`.
+-   `date_col` *(Optional[str])*: Date column name. Example: `'date'`.
+-   `geo_col` *(Optional[str])*: Geography column name. Example: `'region_id'`.
+-   `item_col` *(Optional[str])*: Item column name. Example: `'product_id'`.
 -   `geo_name_col` *(Optional[str])*: Column containing geographical names (used
-    for descriptive aggregation).
+    for descriptive aggregation). Example: `'region_name'`.
 -   `item_name_col` *(Optional[str])*: Column containing item names (used for
-    descriptive aggregation).
+    descriptive aggregation). Example: `'product_name'`.
 -   `run_sensitivity` *(bool, default=False)*: Whether to execute robust
-    sensitivity bounds analysis.
+    sensitivity bounds analysis. Example: `True`.
 -   `sensitivity_scope` *(Optional[List[str]], default=['total'])*: Scope for
     sensitivity bounds analysis. Options include `'total'`, `'geo'`, or
-    `'item'`.
+    `'item'`. Example: `['total', 'item']`.
 -   `ground_truth_existence` *(bool, default=False)*: Set to `True` if ground
-    truth treatment effects are available for evaluation.
+    truth treatment effects are available for evaluation. Example: `False`.
 -   `ground_truth_effect_column` *(Optional[List[str]], default=[])*: Column
-    names containing ground truth effects for each treatment variable.
+    names containing ground truth effects for each treatment variable. Example:
+    `['true_effect_discount', 'true_effect_tv']`.
 -   `treatment_types` *(Optional[Dict[str, str]], default=None)*: Treatment type
     classification. Default type is `"spend"`. Note: Phase 4 ROI charts are
     generated only for `"percentage"`, `"impressions"`, or `"price"` (requires
     `treatment_spend_cols`). For `"spend"`, they are skipped as they are
-    redundant with Phase 5 optimization.
+    redundant with Phase 5 optimization. Example:
+    `{'discount_rate': 'percentage', 'tv_spend': 'spend'}`.
 -   `treatment_spend_cols` *(Optional[Dict[str, str]], default=None)*: Maps
     treatment variables to their monetary spend columns. Automatically maps to
-    the treatment itself if type is `"spend"`.
+    the treatment itself if type is `"spend"`. Example:
+    `{'discount_rate': 'discount_cost'}`.
 -   `sales_col` *(Optional[str], default=None)*: Outcome sales column, used for
-    calculating ROI and optimization.
+    calculating ROI and optimization. Example: `'total_sales'`.
 -   `peak_months` *(Optional[List[int]], default=None)*: List of peak months
     (1-12) to highlight in ROI charts. Defaults to `[3, 7, 11, 12]` if not
-    specified.
+    specified. Example: `[11, 12]`.
 -   `optimize` *(bool, default=False)*: Whether to run the optimization phase
-    (Phase 5).
+    (Phase 5). Example: `True`.
 -   `simple_optimization` *(bool, default=True)*: Currently, optimization is
     calculated only if `optimize = True` and `simple_optimization = True` with a
     single treatment. Advanced optimization (`simple_optimization = False`) and
     optimization for multiple treatments are under development and will not be
-    calculated.
+    calculated. Example: `True`.
 -   `opt_periods` *(Optional[tuple[Any, Any]], default=None)*: Tuple of start
-    and end periods for optimization.
+    and end periods for optimization. Example: `('2023-01-01', '2023-12-31')`.
 -   `opt_threshold_roi` *(float, default=0.0)*: Threshold ROI for optimization.
+    Example: `1.5`.
 -   `opt_other_cost_variables` *(Optional[List[str]], default=None)*: Other cost
-    variables to include in optimization.
+    variables to include in optimization. Example: `['fixed_marketing_cost']`.
 
-#### `run_full_pipeline(self, df, scaler, top_n=5, n_reps=20)`
+#### `run_full_pipeline(self, df, scaler, top_n=5, n_reps=20, process_log='lightweight')`
 
 Executes the full 4-phase pipeline (Grid Search -> Shortlisting -> Ensemble ->
 Consolidation). **Parameters:**
 
--   `df` *(pd.DataFrame)*: The raw input dataset.
--   `scaler` *(CausalDataScaler)*: Initialized scaler object.
+-   `df` *(pd.DataFrame)*: The raw input dataset. Example: `pd.read_csv('data.csv')`.
+-   `scaler` *(CausalDataScaler)*: Initialized scaler object. Example: `CausalDataScaler(standardize_cols=['spend'])`.
 -   `top_n` *(int, default=5)*: Number of top models to select for the final
-    ensemble.
+    ensemble. Example: `3`.
 -   `n_reps` *(int, default=20)*: Number of repetitions for the robust ensemble
-    step.
+    step. Example: `10`.
+-   `process_log` *(str, default='lightweight')*: Log level. If `'lightweight'`,
+    the process will skip generating `1a_full_df_<model>.csv` in
+    `step1_exploration` to save disk space. Another value is `'full'`. Example:
+    `'full'`.
 
 #### `format_cate_equation(self, coef_dict)`
 
 Transforms CATE regression coefficients into a readable algebraic equation text
 string. **Parameters:**
 
--   `coef_dict` *(Dict[str, float])*: Regression coefficients dictionary.
+-   `coef_dict` *(Dict[str, float])*: Regression coefficients dictionary. Example: `{'Intercept': 1.5, 'region_NA': 0.2}`.
     **Returns:**
 
 -   `str`: Formatted algebraic equation string.
@@ -102,12 +113,12 @@ string. **Parameters:**
 Generates shape parameters (mu, sigma, alpha, beta) for probabilistic prior
 matching, useful for Bayesian Media Mix Modeling. **Parameters:**
 
--   `df_1a_consolidated` *(pd.DataFrame)*: Consolidated pipeline results.
--   `treatment_base_name` *(str)*: Treatment base name (excluding lag suffixes).
+-   `df_1a_consolidated` *(pd.DataFrame)*: Consolidated pipeline results. Example: `df_1a`.
+-   `treatment_base_name` *(str)*: Treatment base name (excluding lag suffixes). Example: `'tv_spend'`.
 -   `prior_type` *(str, default='roi')*: Prior type to extract. Either `'roi'`
-    or `'contribution'`.
+    or `'contribution'`. Example: `'roi'`.
 -   `distribution_type` *(str, default='Normal')*: Distribution to fit. Options:
-    `'Normal'`, `'LogNormal'`, `'Beta'`. **Returns:**
+    `'Normal'`, `'LogNormal'`, `'Beta'`. Example: `'Normal'`. **Returns:**
 
 -   `Dict[str, float]`: Dictionary of fitted distribution parameters.
 
@@ -127,15 +138,16 @@ Initializes specific scaling strategies. Issues a `UserWarning` if
 to prevent singularity bugs. **Parameters:**
 
 -   `standardize_cols` *(Optional[List[str]])*: Columns to apply standard
-    scaling.
+    scaling. Example: `['tv_spend', 'search_spend']`.
 -   `population_standardize_cols` *(Optional[List[str]])*: Columns to apply
-    population standardization. *(Note: Placeholder, not implemented).*
+    population standardization. *(Note: Placeholder, not implemented).* Example:
+    `['competitor_sales']`.
 -   `population_median_normalize_cols` *(Optional[List[str]])*: Columns to apply
-    population median normalization.
+    population median normalization. Example: `['sales']`.
 -   `min_max_cols` *(Optional[List[str]])*: Columns to apply Min-Max scaling.
-    *(Note: Placeholder, not implemented).*
+    *(Note: Placeholder, not implemented).* Example: `['temperature']`.
 -   `population_col` *(str, default='population')*: Column specifying the
-    population for normalization.
+    population for normalization. Example: `'population'`.
 
 #### `fit_transform(self, df: pd.DataFrame) -> pd.DataFrame`
 
@@ -164,18 +176,18 @@ Creates lagged features for specified columns in the dataframe.
 
 **Parameters:**
 
--   `df` *(pd.DataFrame)*: The input dataframe.
--   `columns` *(List[str])*: List of column names to create lags for.
+-   `df` *(pd.DataFrame)*: The input dataframe. Example: `raw_df`.
+-   `columns` *(List[str])*: List of column names to create lags for. Example: `['tv_spend']`.
 -   `max_lag` *(int)*: The maximum number of lags to generate (e.g., if 3,
-    generates `_l1`, `_l2`, `_l3`).
+    generates `_l1`, `_l2`, `_l3`). Example: `3`.
 -   `date_col` *(str)*: Column specifying the date/time for exact chronological
-    lagging.
+    lagging. Example: `'date'`.
 -   `time_freq` *(str, default='daily')*: Time frequency for lagging. Options:
-    `'daily'`, `'weekly'`, `'monthly'`.
+    `'daily'`, `'weekly'`, `'monthly'`. Example: `'weekly'`.
 -   `unit_col` *(Optional[str], default=None)*: Optional column to group by
-    before shifting (essential for Geo/Panel data).
+    before shifting (essential for Geo/Panel data). Example: `'geo_id'`.
 -   `na_fill` *(bool, default=True)*: If True, fills the resulting NaN values
-    with 0.
+    with 0. Example: `True`.
 
 **Returns:**
 
@@ -194,21 +206,21 @@ spline basis generation for CATE estimation.
 
 Initializes the DoubleML PLR pipeline. **Parameters:**
 
--   `y_col` *(str)*: Outcome variable.
--   `d_col` *(str)*: Treatment variable.
--   `x_cols` *(List[str])*: Confounding variables.
--   `ml_y_model` *(str)*: Candidate ML model for Y nuisance estimation.
--   `ml_t_model` *(str)*: Candidate ML model for T nuisance estimation.
--   `n_folds` *(int, default=5)*: Number of cross-fitting folds.
--   `time_budget` *(int, default=15)*: AutoML tuning time budget in seconds.
+-   `y_col` *(str)*: Outcome variable. Example: `'sales'`.
+-   `d_col` *(str)*: Treatment variable. Example: `'discount_rate'`.
+-   `x_cols` *(List[str])*: Confounding variables. Example: `['seasonality', 'competitor_price']`.
+-   `ml_y_model` *(str)*: Candidate ML model for Y nuisance estimation. Example: `'lgbm'`.
+-   `ml_t_model` *(str)*: Candidate ML model for T nuisance estimation. Example: `'xgboost'`.
+-   `n_folds` *(int, default=5)*: Number of cross-fitting folds. Example: `5`.
+-   `time_budget` *(int, default=15)*: AutoML tuning time budget in seconds. Example: `15`.
 -   `cate_structure` *(Union[str, Dict[str, Any]], default='auto_additive')*:
-    CATE functional form specifications.
+    CATE functional form specifications. Example: `'auto_additive'`.
 -   `covariates_for_cate` *(Optional[List[str]], default=None)*: Covariates used
-    for CATE estimation.
+    for CATE estimation. Example: `['geo_region']`.
 -   `ground_truth_col` *(Optional[str], default=None)*: Column name for ground
-    truth treatment effect.
+    truth treatment effect. Example: `'true_effect'`.
 -   `cluster_cols` *(Optional[List[str]], default=None)*: Column names used for
-    cluster robust inference.
+    cluster robust inference. Example: `['geo_region']`.
 
 #### `run(self, df_orig: pd.DataFrame, scaler: CausalDataScaler, rep_id: int = 1) -> Dict[str, Any]`
 
@@ -231,11 +243,11 @@ RMSE.
 **Parameters:**
 
 -   `df_metrics` *(pd.DataFrame)*: DataFrame containing evaluation metrics of
-    models.
+    models. Example: `df_metrics`.
 -   `top_n` *(int, default=5)*: Number of top models to select for the final
-    ensemble.
--   `y_rmse_col` *(str)*: Column name for the outcome model RMSE.
--   `t_rmse_col` *(str)*: Column name for the treatment model RMSE.
+    ensemble. Example: `3`.
+-   `y_rmse_col` *(str)*: Column name for the outcome model RMSE. Example: `'nuisance_models_rmse_Y_model_evaluated_by_AutoML'`.
+-   `t_rmse_col` *(str)*: Column name for the treatment model RMSE. Example: `'nuisance_models_rmse_T_model_evaluated_by_AutoML'`.
 
 **Returns:**
 
