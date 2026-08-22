@@ -32,7 +32,9 @@ class TestIO(unittest.TestCase):
   def test_save_step1_outputs(self, mock_to_csv, mock_makedirs):
     """Tests save_step1_outputs."""
     df = pd.DataFrame({"a": [1, 2]})
-    io.save_step1_outputs(df, df, df, "test_model", "/tmp/out")
+    io.save_step1_outputs(
+        df, df, df, "test_model", "/tmp/out", process_log="detailed"
+    )
     mock_makedirs.assert_called_with("/tmp/out", exist_ok=True)
     self.assertEqual(mock_to_csv.call_count, 3)
 

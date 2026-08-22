@@ -523,10 +523,14 @@ class CausalWorkflowOrchestrator:
     """Transforms regression dictionary parameters into a readable equation text string."""
     eq_parts = []
     for name, val in coef_dict.items():
+      if not str(name).endswith("_coef"):
+        continue
       if abs(val) < 1e-10:
         continue
+
+      clean_name = str(name)[:-5]
       clean_name = re.sub(
-          r"bs\(([^,]+)[^\)]*\)(?:\[(\d+)\])?", r"Spline_\2(\1)", name
+          r"bs\(([^,]+)[^\)]*\)(?:\[(\d+)\])?", r"Spline_\2(\1)", clean_name
       )
       clean_name = (
           clean_name.replace("[T.", "_").replace("]", "").replace(":", " * ")
@@ -637,11 +641,21 @@ class CausalWorkflowOrchestrator:
 
         channel_summary = df_3b_concat[df_3b_concat["Channel"] == d_col]
         if not channel_summary.empty:
-          c_err_med = channel_summary["combined_error_median"].iloc[0]
+          c_err_calc_med = channel_summary[
+              "combined_error_calculated_by_median_rmse"
+          ].iloc[0]
           c_err_mean = channel_summary["combined_error_mean"].iloc[0]
           c_err_sd = channel_summary["combined_error_sd"].iloc[0]
+          norm_y_med = channel_summary["norm_median_Y_rmse"].iloc[0]
+          norm_y_mean = channel_summary["norm_Y_rmse_mean"].iloc[0]
+          norm_y_sd = channel_summary["norm_Y_rmse_sd"].iloc[0]
+          norm_t_med = channel_summary["norm_median_T_rmse"].iloc[0]
+          norm_t_mean = channel_summary["norm_T_rmse_mean"].iloc[0]
+          norm_t_sd = channel_summary["norm_T_rmse_sd"].iloc[0]
         else:
-          c_err_med = c_err_mean = c_err_sd = np.nan
+          c_err_calc_med = c_err_mean = c_err_sd = np.nan
+          norm_y_med = norm_y_mean = norm_y_sd = np.nan
+          norm_t_med = norm_t_mean = norm_t_sd = np.nan
 
         row = {
             dim_col: dim_val,
@@ -657,9 +671,15 @@ class CausalWorkflowOrchestrator:
             "total_input": t_input,
             "total_estimated_incremental_KPI": t_kpi,
             "total_estimated_roi": t_kpi / t_input if t_input > 0 else 0,
-            "combined_error_median": c_err_med,
+            "combined_error_calculated_by_median_rmse": c_err_calc_med,
             "combined_error_mean": c_err_mean,
             "combined_error_sd": c_err_sd,
+            "norm_median_Y_rmse": norm_y_med,
+            "norm_Y_rmse_mean": norm_y_mean,
+            "norm_Y_rmse_sd": norm_y_sd,
+            "norm_median_T_rmse": norm_t_med,
+            "norm_T_rmse_mean": norm_t_mean,
+            "norm_T_rmse_sd": norm_t_sd,
             "best_model": 1,
         }
 
@@ -708,9 +728,15 @@ class CausalWorkflowOrchestrator:
           "total_estimated_roi": (
               sum_kpi_total / sum_input_total if sum_input_total > 0 else 0
           ),
-          "combined_error_median": np.nan,
+          "combined_error_calculated_by_median_rmse": np.nan,
           "combined_error_mean": np.nan,
           "combined_error_sd": np.nan,
+          "norm_median_Y_rmse": np.nan,
+          "norm_Y_rmse_mean": np.nan,
+          "norm_Y_rmse_sd": np.nan,
+          "norm_median_T_rmse": np.nan,
+          "norm_T_rmse_mean": np.nan,
+          "norm_T_rmse_sd": np.nan,
           "best_model": 1,
       }
       if self.ground_truth_existence:
@@ -769,11 +795,21 @@ class CausalWorkflowOrchestrator:
 
       channel_summary = df_3b_concat[df_3b_concat["Channel"] == d_col]
       if not channel_summary.empty:
-        c_err_med = channel_summary["combined_error_median"].iloc[0]
+        c_err_calc_med = channel_summary[
+            "combined_error_calculated_by_median_rmse"
+        ].iloc[0]
         c_err_mean = channel_summary["combined_error_mean"].iloc[0]
         c_err_sd = channel_summary["combined_error_sd"].iloc[0]
+        norm_y_med = channel_summary["norm_median_Y_rmse"].iloc[0]
+        norm_y_mean = channel_summary["norm_Y_rmse_mean"].iloc[0]
+        norm_y_sd = channel_summary["norm_Y_rmse_sd"].iloc[0]
+        norm_t_med = channel_summary["norm_median_T_rmse"].iloc[0]
+        norm_t_mean = channel_summary["norm_T_rmse_mean"].iloc[0]
+        norm_t_sd = channel_summary["norm_T_rmse_sd"].iloc[0]
       else:
-        c_err_med = c_err_mean = c_err_sd = np.nan
+        c_err_calc_med = c_err_mean = c_err_sd = np.nan
+        norm_y_med = norm_y_mean = norm_y_sd = np.nan
+        norm_t_med = norm_t_mean = norm_t_sd = np.nan
 
       row = {
           dim_col: dim_val_total,
@@ -789,9 +825,15 @@ class CausalWorkflowOrchestrator:
           "total_input": t_input,
           "total_estimated_incremental_KPI": t_kpi,
           "total_estimated_roi": t_kpi / t_input if t_input > 0 else 0,
-          "combined_error_median": c_err_med,
+          "combined_error_calculated_by_median_rmse": c_err_calc_med,
           "combined_error_mean": c_err_mean,
           "combined_error_sd": c_err_sd,
+          "norm_median_Y_rmse": norm_y_med,
+          "norm_Y_rmse_mean": norm_y_mean,
+          "norm_Y_rmse_sd": norm_y_sd,
+          "norm_median_T_rmse": norm_t_med,
+          "norm_T_rmse_mean": norm_t_mean,
+          "norm_T_rmse_sd": norm_t_sd,
           "best_model": 1,
       }
 
@@ -855,9 +897,15 @@ class CausalWorkflowOrchestrator:
             if sum_input_total_all > 0
             else 0
         ),
-        "combined_error_median": np.nan,
+        "combined_error_calculated_by_median_rmse": np.nan,
         "combined_error_mean": np.nan,
         "combined_error_sd": np.nan,
+        "norm_median_Y_rmse": np.nan,
+        "norm_Y_rmse_mean": np.nan,
+        "norm_Y_rmse_sd": np.nan,
+        "norm_median_T_rmse": np.nan,
+        "norm_T_rmse_mean": np.nan,
+        "norm_T_rmse_sd": np.nan,
         "best_model": 1,
     }
 
@@ -911,6 +959,7 @@ class CausalWorkflowOrchestrator:
     best_model_data_dict = {}
     all_best_models_3b = []
     all_3a_details = []
+    all_cate_pool_rows = []
 
     for idx, d_col in enumerate(self.d_cols):
       x_cols = self.x_cols_list[idx]
@@ -1049,26 +1098,61 @@ class CausalWorkflowOrchestrator:
           r["model_group"] for r in all_iter_results_for_channel
       ]
 
-      epsilon = 1e-9
       y_col_rmse = "nuisance_models_rmse_Y_model_evaluated_by_AutoML"
       t_col_rmse = "nuisance_models_rmse_T_model_evaluated_by_AutoML"
+      eps = 1e-9
+
+      df_3a_detail["raw_Y_rmse"] = df_3a_detail[y_col_rmse]
+      df_3a_detail["median_raw_Y_rmse"] = df_3a_detail.groupby("Model Group")[
+          "raw_Y_rmse"
+      ].transform("median")
+
+      min_y = df_3a_detail["raw_Y_rmse"].min()
+      max_y = df_3a_detail["raw_Y_rmse"].max()
       df_3a_detail["norm_Y_rmse"] = (
-          df_3a_detail[y_col_rmse] - df_3a_detail[y_col_rmse].min() + epsilon
-      ) / (
-          df_3a_detail[y_col_rmse].max()
-          - df_3a_detail[y_col_rmse].min()
-          + epsilon
-      )
+          df_3a_detail["raw_Y_rmse"] - min_y + eps
+      ) / (max_y - min_y + eps)
+
+      df_3a_detail["norm_median_Y_rmse"] = (
+          df_3a_detail["median_raw_Y_rmse"] - min_y + eps
+      ) / (max_y - min_y + eps)
+
+      df_3a_detail["raw_T_rmse"] = df_3a_detail[t_col_rmse]
+      df_3a_detail["median_raw_T_rmse"] = df_3a_detail.groupby("Model Group")[
+          "raw_T_rmse"
+      ].transform("median")
+
+      min_t = df_3a_detail["raw_T_rmse"].min()
+      max_t = df_3a_detail["raw_T_rmse"].max()
       df_3a_detail["norm_T_rmse"] = (
-          df_3a_detail[t_col_rmse] - df_3a_detail[t_col_rmse].min() + epsilon
-      ) / (
-          df_3a_detail[t_col_rmse].max()
-          - df_3a_detail[t_col_rmse].min()
-          + epsilon
-      )
+          df_3a_detail["raw_T_rmse"] - min_t + eps
+      ) / (max_t - min_t + eps)
+
+      df_3a_detail["norm_median_T_rmse"] = (
+          df_3a_detail["median_raw_T_rmse"] - min_t + eps
+      ) / (max_t - min_t + eps)
+
       df_3a_detail["combined_error"] = df_3a_detail["norm_T_rmse"] * (
           df_3a_detail["norm_T_rmse"] + df_3a_detail["norm_Y_rmse"]
       )
+      df_3a_detail["combined_error_calculated_by_median_rmse"] = df_3a_detail[
+          "norm_median_T_rmse"
+      ] * (
+          df_3a_detail["norm_median_T_rmse"]
+          + df_3a_detail["norm_median_Y_rmse"]
+      )
+
+      min_combined = df_3a_detail[
+          "combined_error_calculated_by_median_rmse"
+      ].min()
+      best_model_group = df_3a_detail.loc[
+          df_3a_detail["combined_error_calculated_by_median_rmse"]
+          == min_combined,
+          "Model Group",
+      ].iloc[0]
+      df_3a_detail["best_model"] = (
+          df_3a_detail["Model Group"] == best_model_group
+      ).astype(int)
 
       iteration_summaries = []
       for m_group, df_group in df_3a_detail.groupby(
@@ -1124,23 +1208,22 @@ class CausalWorkflowOrchestrator:
           })
 
         sum_res.update({
-            "combined_error_median": df_group["combined_error"].median(),
+            "norm_median_Y_rmse": df_group["norm_median_Y_rmse"].iloc[0],
+            "norm_Y_rmse_mean": df_group["norm_Y_rmse"].mean(),
+            "norm_Y_rmse_sd": df_group["norm_Y_rmse"].std(),
+            "norm_median_T_rmse": df_group["norm_median_T_rmse"].iloc[0],
+            "norm_T_rmse_mean": df_group["norm_T_rmse"].mean(),
+            "norm_T_rmse_sd": df_group["norm_T_rmse"].std(),
             "combined_error_mean": df_group["combined_error"].mean(),
             "combined_error_sd": df_group["combined_error"].std(),
-            "best_model": 0,
+            "combined_error_calculated_by_median_rmse": (
+                df_group["combined_error_calculated_by_median_rmse"].iloc[0]
+            ),
+            "best_model": 1 if m_group == best_model_group else 0,
         })
         iteration_summaries.append(sum_res)
 
       df_3b_summary = pd.DataFrame(iteration_summaries)
-      best_model_group = df_3b_summary.loc[
-          df_3b_summary["combined_error_median"].idxmin(), "Model Group"
-      ]
-      df_3b_summary.loc[
-          df_3b_summary["Model Group"] == best_model_group, "best_model"
-      ] = 1
-      df_3a_detail["best_model"] = (
-          df_3a_detail["Model Group"] == best_model_group
-      ).astype(int)
 
       best_group_results = [
           r
@@ -1218,6 +1301,133 @@ class CausalWorkflowOrchestrator:
       )
       best_model_data_dict[d_col] = best_model_data
 
+      for misleading_key in ["Y_pred", "T_pred", "Y_res", "T_res"]:
+        best_model_data.pop(misleading_key, None)
+
+      if "cate_coef_dict" in best_group_results[0]:
+        pooled_cate_coef_dict = {}
+        all_keys = set()
+        for r in best_group_results:
+          if "cate_coef_dict" in r:
+            all_keys.update(r["cate_coef_dict"].keys())
+
+        for cov in [str(k)[:-5] for k in all_keys if str(k).endswith("_coef")]:
+          coef_key = f"{cov}_coef"
+          stderr_key = f"{cov}_stderr"
+          pvalue_key = f"{cov}_pvalue"
+
+          coef_vals = []
+          stderr_vals = []
+          for r in best_group_results:
+            if "cate_coef_dict" in r and coef_key in r["cate_coef_dict"]:
+              coef_vals.append(r["cate_coef_dict"][coef_key])
+              stderr_vals.append(r["cate_coef_dict"].get(stderr_key, np.nan))
+
+          if coef_vals:
+            coef_array = np.array(coef_vals, dtype=float)
+
+            # 1. Pool the Coefficients
+            pooled_coef = float(np.nanmedian(coef_array))
+            pooled_cate_coef_dict[coef_key] = pooled_coef
+
+            # 2. Calculate the Robust Pooled Standard Error
+            if not np.all(np.isnan(stderr_vals)):
+              stderr_array = np.array(stderr_vals, dtype=float)
+              variance_array = stderr_array**2 + (coef_array - pooled_coef) ** 2
+              pooled_stderr = float(np.sqrt(np.nanmedian(variance_array)))
+              pooled_cate_coef_dict[stderr_key] = pooled_stderr
+
+              # 3. Recalculate the Pooled P-value
+              if pooled_stderr > 0 and not np.isnan(pooled_stderr):
+                z_score = pooled_coef / pooled_stderr
+                pooled_pvalue = float(stats.norm.sf(np.abs(z_score)) * 2)
+              elif pooled_stderr == 0.0:
+                pooled_pvalue = 0.0
+              else:
+                pooled_pvalue = np.nan
+              pooled_cate_coef_dict[pvalue_key] = pooled_pvalue
+
+        # Handle any remaining keys that were not processed (if any)
+        for key in all_keys - set(pooled_cate_coef_dict.keys()):
+          vals = [
+              r["cate_coef_dict"][key]
+              for r in best_group_results
+              if "cate_coef_dict" in r and key in r["cate_coef_dict"]
+          ]
+          if vals:
+            pooled_cate_coef_dict[key] = float(np.nanmedian(vals))
+
+        best_model_data["cate_coef_dict"] = pooled_cate_coef_dict
+
+        keys_to_keep = [
+            "model",
+            "d_col",
+            "x_col",
+            "y_col",
+            "covariates_for_cate",
+            "cate_structure",
+            "cate_df",
+            "cate_degree",
+            "cate_intercept",
+        ]
+        for r in best_group_results:
+          row = {k: r["metrics_1c"].get(k) for k in keys_to_keep}
+          c_dict = r.get("cate_coef_dict", {})
+          row["cate_coef_dict"] = json.dumps(
+              {k: v for k, v in c_dict.items() if str(k).endswith("_coef")}
+          )
+          row["cate_pvalue_dict"] = json.dumps(
+              {k: v for k, v in c_dict.items() if str(k).endswith("_pvalue")}
+          )
+          row["cate_stderr_dict"] = json.dumps(
+              {k: v for k, v in c_dict.items() if str(k).endswith("_stderr")}
+          )
+          all_cate_pool_rows.append(row)
+
+        median_row = {
+            k: best_group_results[0]["metrics_1c"].get(k) for k in keys_to_keep
+        }
+        median_row["model"] = "median"
+        median_row["cate_coef_dict"] = json.dumps({
+            k: v
+            for k, v in pooled_cate_coef_dict.items()
+            if str(k).endswith("_coef")
+        })
+        median_row["cate_pvalue_dict"] = json.dumps({
+            k: v
+            for k, v in pooled_cate_coef_dict.items()
+            if str(k).endswith("_pvalue")
+        })
+        median_row["cate_stderr_dict"] = json.dumps({
+            k: v
+            for k, v in pooled_cate_coef_dict.items()
+            if str(k).endswith("_stderr")
+        })
+        all_cate_pool_rows.append(median_row)
+
+      if "model_obj" in best_model_data:
+        # Task 1: Inject Contextual Metadata for Historical Results
+        best_model_data["model_obj"].pipeline_metadata_ = {
+            "historical_results_path": (
+                "step4_consolidated_results/consolidated_1a_full_df.csv"
+            ),
+            "message": (
+                "Valid, pooled historical estimation results are stored in the "
+                "above CSV. This pickle acts as an inference engine for future "
+                "out-of-sample data, not for historical diagnostic lookup."
+            ),
+        }
+
+        # Task 2: Ensure Fitted Models are Saved for Out-of-Sample Inference
+        # Enforce store_models=True so that the exported .pkl explicitly retains
+        # the fitted T-models, Y-models, and causal effect functions (theta).
+        best_model_data["model_obj"].store_models = True
+
+        if "cate_coef_dict" in best_model_data:
+          best_model_data["model_obj"].cate_coef_dict_ = best_model_data[
+              "cate_coef_dict"
+          ]
+
       io.save_step3_outputs(
           df_3a_detail,
           df_3b_summary,
@@ -1257,6 +1467,11 @@ class CausalWorkflowOrchestrator:
     pd.concat(all_3a_details, ignore_index=True).to_csv(
         os.path.join(phase4_dir, "consolidated_3a_detail.csv"), index=False
     )
+    if all_cate_pool_rows:
+      pd.DataFrame(all_cate_pool_rows).to_csv(
+          os.path.join(cate_graph_dir, "cate_coef_dict_pooling.csv"),
+          index=False,
+      )
     df_3b_concat = pd.concat(all_best_models_3b, ignore_index=True)
     is_lag = df_3b_concat["Channel"].str.contains(r"_l\d+$", regex=True)
     sum_input = df_3b_concat.loc[~is_lag, "total_input"].sum()
@@ -1275,9 +1490,15 @@ class CausalWorkflowOrchestrator:
         "total_input": sum_input,
         "total_estimated_incremental_KPI": sum_kpi,
         "total_estimated_roi": sum_kpi / sum_input if sum_input > 0 else 0,
-        "combined_error_median": np.nan,
+        "combined_error_calculated_by_median_rmse": np.nan,
         "combined_error_mean": np.nan,
         "combined_error_sd": np.nan,
+        "norm_median_Y_rmse": np.nan,
+        "norm_Y_rmse_mean": np.nan,
+        "norm_Y_rmse_sd": np.nan,
+        "norm_median_T_rmse": np.nan,
+        "norm_T_rmse_mean": np.nan,
+        "norm_T_rmse_sd": np.nan,
         "best_model": 1,
     }
 
@@ -1321,6 +1542,7 @@ class CausalWorkflowOrchestrator:
     total_gt_sales = np.zeros(len(df)) if self.ground_truth_existence else None
     individual_kpi_cols = []
     cate_eq_dict = {}
+    cate_stats_dict = {}
 
     for idx, (d_col, b_data) in enumerate(best_model_data_dict.items()):
       c_kpi, c_low, c_upp = (
@@ -1348,6 +1570,24 @@ class CausalWorkflowOrchestrator:
         cate_eq_dict[d_col] = self.format_cate_equation(
             b_data["cate_coef_dict"]
         )
+        c_dict = b_data["cate_coef_dict"]
+        cate_stats_dict[d_col] = {
+            "coef": {
+                str(k)[:-5]: v
+                for k, v in c_dict.items()
+                if str(k).endswith("_coef")
+            },
+            "pvalue": {
+                str(k)[:-7]: v
+                for k, v in c_dict.items()
+                if str(k).endswith("_pvalue")
+            },
+            "stderr": {
+                str(k)[:-7]: v
+                for k, v in c_dict.items()
+                if str(k).endswith("_stderr")
+            },
+        }
 
     df_1a_consolidated["total_estimated_incremental_KPI"] = total_est_sales
     df_1a_consolidated["total_estimated_incremental_KPI_2.5%"] = total_lower_ci
@@ -1673,6 +1913,7 @@ class CausalWorkflowOrchestrator:
         bin_cols,
         cate_eq_dict,
         os.path.join(cate_graph_dir, "cate_scatter_matrix.png"),
+        cate_stats_dict,
     )
 
     print("  ├─ Generating Prior Distributions & CSV...", flush=True)

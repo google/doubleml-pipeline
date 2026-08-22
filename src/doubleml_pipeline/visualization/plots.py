@@ -682,14 +682,21 @@ def plot_sensitivity_contour(
 
 
 def plot_cate_scatter_matrix(
-    df_1a_consolidated, d_cols, cont_cols, bin_cols, eq_str_dict, out_path
+    df_1a_consolidated,
+    d_cols,
+    cont_cols,
+    bin_cols,
+    eq_str_dict,
+    out_path,
+    cate_stats_dict=None,
 ):
   """Plots a scatter matrix showing CATE estimations against covariates."""
   n_rows = len(d_cols) + 1
   n_cols = len(cont_cols) if cont_cols else 1
 
+  fig_height = max(24, 10 * n_rows)
   fig, axes = plt.subplots(
-      n_rows, n_cols, figsize=(12 * n_cols + 6, 8 * n_rows), squeeze=False
+      n_rows, n_cols, figsize=(12 * n_cols + 20, fig_height), squeeze=False
   )
   fig.suptitle(
       'CATE Scatter Matrix: Treatment vs Incremental Effect',
@@ -824,40 +831,120 @@ def plot_cate_scatter_matrix(
     ax.set_ylabel('Total Incremental KPI', fontsize=14)
     ax.grid(True, linestyle=':', alpha=0.5)
 
-  plt.tight_layout(rect=[0, 0.03, 0.65, 0.95])
+  plt.tight_layout(rect=[0, 0.03, 0.55, 0.95])
+
+  ax_right = fig.add_axes([0.58, 0.05, 0.40, 0.90])
+  ax_right.axis('off')
+
+  max_chars = 68
 
   handles, labels = axes[0, 0].get_legend_handles_labels()
-  if handles:
-    fig.legend(
-        handles,
-        labels,
-        loc='upper left',
-        bbox_to_anchor=(0.67, 0.95),
-        fontsize=12,
-        title='Binary Covariates',
-        title_fontsize=14,
-    )
 
-  eq_text = 'Estimated CATE Functions:\n' + '-' * 40 + '\n\n'
+  eq_lines = ['Estimated CATE Functions:', '-' * max_chars, '']
   for d_col, eq_str in eq_str_dict.items():
-    wrapped_eq = '\n'.join(textwrap.wrap(eq_str, width=50))
-    eq_text += f'[{d_col}]\n{wrapped_eq}\n\n'
+    wrapped_eq = textwrap.wrap(eq_str, width=max_chars)
+    eq_lines.append(f'[{d_col}]')
+    eq_lines.extend(wrapped_eq)
+    eq_lines.append('')
 
   note_text = (
       'Note: Interpretation of coefficients of CATE function should be'
       ' directional as they are estimated based on normalised covariates.'
   )
-  wrapped_note = '\n'.join(textwrap.wrap(note_text, width=50))
-  eq_text += '-' * 40 + '\n' + wrapped_note
+  eq_lines.append('-' * max_chars)
+  eq_lines.extend(textwrap.wrap(note_text, width=max_chars))
 
-  fig.text(
-      0.67,
-      0.6,
-      eq_text,
+  eq_text = '\n'.join([line.ljust(max_chars) for line in eq_lines])
+
+  stats_lines = ['P-value & Std Err:', '-' * max_chars, '']
+  if cate_stats_dict:
+    for d_col, cate_stats in cate_stats_dict.items():
+      stats_lines.append(f'[{d_col}]')
+      stats_lines.append(
+          f'{"Covariate":<35} {"Coef":>10} {"P-val":>10} {"StdErr":>10}'
+      )
+      coefs = cate_stats.get('coef', {})
+      pvals = cate_stats.get('pvalue', {})
+      stderrs = cate_stats.get('stderr', {})
+
+      def format_val(val):
+        return str(val) if isinstance(val, str) else f'{val:.3f}'
+
+      for cov in pvals.keys():
+        coef_val = coefs.get(cov, np.nan)
+        pval_val = pvals[cov]
+        stderr_val = stderrs.get(cov, np.nan)
+
+        c_str = format_val(coef_val)
+        p_str = format_val(pval_val)
+        s_str = format_val(stderr_val)
+
+        cov_wrap = textwrap.wrap(cov, width=35)
+        if not cov_wrap:
+          cov_wrap = ['']
+        stats_lines.append(
+            f'{cov_wrap[0]:<35} {c_str:>10} {p_str:>10} {s_str:>10}'
+        )
+        for extra_line in cov_wrap[1:]:
+          stats_lines.append(f'{extra_line:<35} {"":>10} {"":>10} {"":>10}')
+      stats_lines.append('')
+
+  stats_text = '\n'.join([line.ljust(max_chars) for line in stats_lines])
+
+  eq_lines_count = len(eq_lines)
+  stats_lines_count = len(stats_lines)
+  legend_lines = (len(labels) * 2 + 2) if handles else 0
+
+  total_lines = legend_lines + eq_lines_count + stats_lines_count
+  line_height_pt = 0.35
+  required_height = total_lines * line_height_pt * 1.5 + 4
+  if required_height > fig_height:
+    fig_height = required_height
+    fig.set_figheight(fig_height)
+
+  line_height_norm = line_height_pt / fig_height
+
+  y_curr = 1.0
+  if handles:
+    padded_labels = [lbl.ljust(max_chars - 4) for lbl in labels]
+    leg = ax_right.legend(
+        handles,
+        padded_labels,
+        loc='upper left',
+        bbox_to_anchor=(0.0, y_curr),
+        title='Binary Covariates',
+        prop={'family': 'monospace', 'size': 12},
+        facecolor='lightgray',
+        edgecolor='black',
+        borderpad=0.5,
+        fancybox=True,
+    )
+    plt.setp(leg.get_title(), family='monospace', fontsize=14)
+
+    y_curr -= (legend_lines * line_height_norm) + 0.01
+
+  box_format = dict(
       fontsize=12,
+      family='monospace',
+      linespacing=1.5,
       verticalalignment='top',
-      bbox=dict(boxstyle='round', facecolor='whitesmoke', alpha=0.8),
+      bbox=dict(
+          boxstyle='round,pad=0.5',
+          facecolor='lightgray',
+          edgecolor='black',
+      ),
   )
+
+  ax_right.text(
+      0.0, y_curr, eq_text, transform=ax_right.transAxes, **box_format
+  )
+
+  y_curr -= (eq_lines_count * line_height_norm * 1.5) + 0.02
+
+  ax_right.text(
+      0.0, y_curr, stats_text, transform=ax_right.transAxes, **box_format
+  )
+
   plt.savefig(out_path, dpi=200)
   plt.close()
 

@@ -158,3 +158,51 @@ def aggregate_geo_item_metrics(
   )
   df_agg.insert(0, 'model', model_name)
   return df_agg
+
+
+def compute_nuisance_combined_error(
+    df_metrics: pd.DataFrame,
+    y_rmse_col: str,
+    t_rmse_col: str,
+) -> pd.DataFrame:
+  """Computes a normalized composite error metric from Y and T model errors.
+
+  Contextual Error Shifting: For the exact same winning model architecture, its
+  computed `combined_error` will mathematically differ between Phase 1 and
+  Phase 3. This is expected.
+
+  - Phase 1 Exploration (selection.py): Normalization spans across distinct
+    competing algorithmic combinations (e.g., XGBoost vs Ridge). The loss
+    measures inter-model algorithmic superiority.
+  - Phase 3 Ensembling (workflow.py): Normalization strictly spans across
+    data-splitting runs (e.g., rep_1..20) of the *same* winning model. The loss
+    measures intra-model partition stability.
+
+  Args:
+    df_metrics: DataFrame containing the RMSE columns.
+    y_rmse_col: Name of the column for Y model RMSE.
+    t_rmse_col: Name of the column for T model RMSE.
+
+  Returns:
+    The updated DataFrame with 'norm_Y_rmse', 'norm_T_rmse', and
+    'combined_error' columns.
+  """
+  epsilon = 1e-9
+
+  min_val_y = df_metrics[y_rmse_col].min()
+  max_val_y = df_metrics[y_rmse_col].max()
+  df_metrics['norm_Y_rmse'] = (df_metrics[y_rmse_col] - min_val_y + epsilon) / (
+      max_val_y - min_val_y + epsilon
+  )
+
+  min_val_t = df_metrics[t_rmse_col].min()
+  max_val_t = df_metrics[t_rmse_col].max()
+  df_metrics['norm_T_rmse'] = (df_metrics[t_rmse_col] - min_val_t + epsilon) / (
+      max_val_t - min_val_t + epsilon
+  )
+
+  df_metrics['combined_error'] = df_metrics['norm_T_rmse'] * (
+      df_metrics['norm_T_rmse'] + df_metrics['norm_Y_rmse']
+  )
+
+  return df_metrics

@@ -107,21 +107,26 @@ class TestWorkflow(unittest.TestCase):
   def test_format_cate_equation(self):
     """Tests formatting of CATE equation from coefficients."""
     coef_dict = {
-        "Intercept": 0.5,
-        "bs(X1)": -1.2,
-        "bs(X2)[0]": 0.00005,
+        "Intercept_coef": 0.5,
+        "bs(X1)_coef": -1.2,
+        "bs(X2)[0]_coef": 0.00005,
+        "Intercept_pvalue": 0.01,
+        "Intercept_stderr": 0.05,
     }
     equation = self.orchestrator.format_cate_equation(coef_dict)
 
     self.assertIn("0.5000", equation)
     self.assertIn("-1.2000 * Spline_(X1)", equation)
     self.assertIn("+5.00e-05 * Spline_0(X2)", equation)
+    # Ensure pvalue and stderr are ignored
+    self.assertNotIn("0.01", equation)
+    self.assertNotIn("0.05", equation)
 
   def test_format_cate_equation_empty(self):
     """Tests CATE equation formatting for near-zero coefficients."""
     coef_dict = {
-        "Intercept": 1e-11,
-        "X1": 1e-12,
+        "Intercept_coef": 1e-11,
+        "X1_coef": 1e-12,
     }
     equation = self.orchestrator.format_cate_equation(coef_dict)
     self.assertEqual(equation, "Constant Effect")

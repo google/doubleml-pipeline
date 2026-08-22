@@ -16,6 +16,8 @@
 
 import pandas as pd
 
+from . import metrics
+
 
 def shortlist_top_models(
     df_metrics: pd.DataFrame,
@@ -28,22 +30,9 @@ def shortlist_top_models(
     return df_metrics
 
   df_copy = df_metrics.copy()
-  epsilon = 1e-9
 
-  min_val_y = df_copy[y_rmse_col].min()
-  max_val_y = df_copy[y_rmse_col].max()
-  df_copy['norm_Y_rmse'] = (df_copy[y_rmse_col] - min_val_y + epsilon) / (
-      max_val_y - min_val_y + epsilon
-  )
-
-  min_val_t = df_copy[t_rmse_col].min()
-  max_val_t = df_copy[t_rmse_col].max()
-  df_copy['norm_T_rmse'] = (df_copy[t_rmse_col] - min_val_t + epsilon) / (
-      max_val_t - min_val_t + epsilon
-  )
-
-  df_copy['combined_error'] = df_copy['norm_T_rmse'] * (
-      df_copy['norm_T_rmse'] + df_copy['norm_Y_rmse']
+  df_copy = metrics.compute_nuisance_combined_error(
+      df_copy, y_rmse_col, t_rmse_col
   )
 
   df_sorted = df_copy.sort_values(

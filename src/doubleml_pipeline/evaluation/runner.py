@@ -327,7 +327,9 @@ class DoubleMLPipeline:
     try:
       cate_summary = cate_obj.summary
       for idx, row in cate_summary.iterrows():
-        cate_coef_dict[str(idx)] = float(row['coef'])
+        cate_coef_dict[f'{idx}_coef'] = float(row['coef'])
+        cate_coef_dict[f'{idx}_pvalue'] = float(row.get('P>|t|', np.nan))
+        cate_coef_dict[f'{idx}_stderr'] = float(row.get('std err', np.nan))
     except (AttributeError, KeyError):
       pass
 
