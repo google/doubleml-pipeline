@@ -16,9 +16,8 @@
 
 import unittest
 
-import pandas as pd
-
 from doubleml_pipeline.evaluation import selection
+import pandas as pd
 
 
 class TestSelection(unittest.TestCase):

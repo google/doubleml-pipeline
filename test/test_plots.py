@@ -17,9 +17,8 @@
 import unittest
 from unittest import mock
 
-import pandas as pd
-
 from doubleml_pipeline.visualization import plots
+import pandas as pd
 
 
 class TestPlots(unittest.TestCase):

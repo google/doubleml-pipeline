@@ -16,9 +16,8 @@
 
 import unittest
 
-import sklearn
-
 from doubleml_pipeline.models import flaml_dml
+import sklearn
 
 
 class TestFlamlDML(unittest.TestCase):

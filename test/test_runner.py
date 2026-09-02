@@ -17,11 +17,10 @@
 import unittest
 from unittest import mock
 
-import numpy as np
-import pandas as pd
-
 from doubleml_pipeline.evaluation import runner
 from doubleml_pipeline.preprocessing import scalers
+import numpy as np
+import pandas as pd
 
 
 class TestRunner(unittest.TestCase):

@@ -14,12 +14,12 @@
 
 """Tests for io operations in the doubleml_pipeline utils module."""
 
+import os
 import unittest
 from unittest import mock
 
-import pandas as pd
-
 from doubleml_pipeline.utils import io
+import pandas as pd
 
 
 class TestIO(unittest.TestCase):
@@ -29,14 +29,52 @@ class TestIO(unittest.TestCase):
       "doubleml_pipeline.utils.io.os.makedirs"
   )
   @mock.patch("pandas.DataFrame.to_csv")
-  def test_save_step1_outputs(self, mock_to_csv, mock_makedirs):
-    """Tests save_step1_outputs."""
+  def test_save_step1_outputs_default_processlog(
+      self, mock_to_csv, mock_makedirs
+  ):
+    """Tests save_step1_outputs default behavior (lightweight process_log)."""
+    df = pd.DataFrame({"a": [1, 2]})
+    io.save_step1_outputs(
+        df, df, df, "test_model", "/tmp/out"
+    )
+    mock_makedirs.assert_called_with("/tmp/out", exist_ok=True)
+    self.assertEqual(mock_to_csv.call_count, 2)
+    calls = [
+        mock.call(
+            os.path.join("/tmp/out", "1b_geo_item_test_model.csv"), index=False
+        ),
+        mock.call(
+            os.path.join("/tmp/out", "1c_metrics_test_model.csv"), index=False
+        ),
+    ]
+    mock_to_csv.assert_has_calls(calls, any_order=True)
+
+  @mock.patch(
+      "doubleml_pipeline.utils.io.os.makedirs"
+  )
+  @mock.patch("pandas.DataFrame.to_csv")
+  def test_save_step1_outputs_custom_processlog(
+      self, mock_to_csv, mock_makedirs
+  ):
+    """Tests save_step1_outputs with custom process_log."""
     df = pd.DataFrame({"a": [1, 2]})
     io.save_step1_outputs(
         df, df, df, "test_model", "/tmp/out", process_log="detailed"
     )
     mock_makedirs.assert_called_with("/tmp/out", exist_ok=True)
     self.assertEqual(mock_to_csv.call_count, 3)
+    calls = [
+        mock.call(
+            os.path.join("/tmp/out", "1a_full_df_test_model.csv"), index=False
+        ),
+        mock.call(
+            os.path.join("/tmp/out", "1b_geo_item_test_model.csv"), index=False
+        ),
+        mock.call(
+            os.path.join("/tmp/out", "1c_metrics_test_model.csv"), index=False
+        ),
+    ]
+    mock_to_csv.assert_has_calls(calls, any_order=True)
 
   @mock.patch(
       "doubleml_pipeline.utils.io.os.makedirs"

@@ -16,9 +16,8 @@
 
 import unittest
 
-import pandas as pd
-
 from doubleml_pipeline.preprocessing import scalers
+import pandas as pd
 
 
 class TestScalers(unittest.TestCase):

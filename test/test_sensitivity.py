@@ -17,9 +17,8 @@
 import unittest
 from unittest import mock
 
-import pandas as pd
-
 from doubleml_pipeline.evaluation import sensitivity
+import pandas as pd
 
 
 class TestSensitivity(unittest.TestCase):

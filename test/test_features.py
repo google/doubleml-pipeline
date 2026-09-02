@@ -16,10 +16,9 @@
 
 import unittest
 
+from doubleml_pipeline.preprocessing import features
 import pandas as pd
 import pytest
-
-from doubleml_pipeline.preprocessing import features
 
 
 class TestFeatures(unittest.TestCase):
