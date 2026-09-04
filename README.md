@@ -225,6 +225,7 @@ For a comprehensive step-by-step walkthrough of pipeline settings, modeling work
 *   **User Guide**: For a step-by-step walkthrough of pipeline settings and visual slide guides, refer to the [User Guide](docs/guide.md).
 *   **API Reference**: For a comprehensive list of modules, classes, and
     function signatures, refer to the [API Reference](docs/api_reference.md).
+*   **Output CSV Schema**: For detailed specifications of all output CSV files, including column names, data types, and descriptions, refer to the [Output CSV Schema](docs/output_csv_schema.md).
 *   **Interactive Sample**: Check out the
     [Sample Jupyter Notebook](examples/doubleml-pipeline_sample_notebook_IN.ipynb) which walks
     through simulating realistic panel marketing data, engineering lagged
