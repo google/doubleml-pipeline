@@ -50,6 +50,14 @@ scientifically robust and highly automated.
 *   **Sensitivity Analysis (OVB)**: Runs robust omitted variable bias (OVB)
     checks to evaluate how sensitive your causal estimates are to unobserved
     confounders.
+*   **Bayesian MMM Prior Calibration**: Extracts fitted distribution
+    parameters (Normal, LogNormal, Beta) for treatment contribution (%) and ROI
+    (e.g., discount) as prior knowledge. Because CATE estimated by DML
+    fluctuates depending on conditions (e.g., seasonality), using only the mean
+    of the distribution as input to Bayesian MMM priors is a consideration.
+    Additionally, it is important to be aware that there may be a gap between
+    ATE MMM estimates and CATE DML estimates due to differences in the
+    estimands.
 *   **Publication-Ready Visualizations**: Generates comprehensive time series
     line plots, stacked contribution bar charts, cross-sectional ROI
     comparisons, and prior distribution shapes.
@@ -190,6 +198,11 @@ specified `output_dir` (e.g., `./causal_results/`) as shown below:
     | `"spend"` *(default)* | Not required | **Not Generated** | Not generated specifically because they are redundant with the output generated in Phase 4. |
     | `"percentage"`, `"impressions"`, or `"price"` | **Provided** | **Generated** | Explicitly generates ROI charts (`003_promo_roi_by_month` and `004_promo_roi_by_entity`). |
     | `"percentage"`, `"impressions"`, or `"price"` | **Missing** | **Skipped (Warning)** | Pipeline logs a warning and skips ROI charts because monetary spend mapping is missing. |
+
+    > [!NOTE]
+    > When setting `treatment_types` to `"price"`, "price" should refer to the
+    > difference between the current price and a benchmark price (for example,
+    > `price = maximum price - current price`).
 
 2.  **Optimization:** Currently, optimization calculations can only be performed
     if `optimize = True` and `simple_optimization = True` with a single
