@@ -227,7 +227,7 @@ For a comprehensive step-by-step walkthrough of pipeline settings, modeling work
     function signatures, refer to the [API Reference](docs/api_reference.md).
 *   **Output CSV Schema**: For detailed specifications of all output CSV files, including column names, data types, and descriptions, refer to the [Output CSV Schema](docs/output_csv_schema.md).
 *   **Interactive Sample**: Check out the
-    [Sample Jupyter Notebook](examples/doubleml-pipeline_sample_notebook_IN.ipynb) which walks
+    [Sample Jupyter Notebook](examples/IN_skincare/doubleml-pipeline_sample_notebook_IN.ipynb) which walks
     through simulating realistic panel marketing data, engineering lagged
     features, scaling, running the DML pipeline, and plotting the results.
 
@@ -239,6 +239,19 @@ We welcome contributions!
     please open an issue in the GitHub repository issue tracker.
 *   **Submitting Changes**: Please see [CONTRIBUTING.md](CONTRIBUTING.md) for our guidelines on
     submitting pull requests.
+
+--------------------------------------------------------------------------------
+
+## Acknowledgments & Dataset Credits
+
+We gratefully acknowledge our partners for their collaboration on the simulation
+datasets included under [`examples/`](examples/):
+
+*   **[`examples/IN_skincare/`](examples/IN_skincare/)**: Simulation data and
+    example materials provided in collaboration with **Analytic Edge**.
+*   **[`examples/JP_retailer/`](examples/JP_retailer/)**: Simulation data
+    designed and provided by **Hakuhodo Inc.**, informed by real-world Japanese
+    marketing dynamics.
 
 --------------------------------------------------------------------------------
 
