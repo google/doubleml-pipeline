@@ -92,7 +92,13 @@ pip install .
 
 Here is how to initialize and run the causal pipeline in a standard Python
 environment, explicitly configuring all scaling, modeling, and financial
-parameters:
+parameters.
+
+> [!TIP]
+> **Ready-to-Use Simulation Datasets:** Don't have a dataset on hand? We have
+> prepared realistic marketing simulation datasets and end-to-end sample
+> notebooks in the [`examples/`](examples/) directory. Feel free to use them to
+> explore the pipeline and test its features right away!
 
 ```python
 import pandas as pd
@@ -226,10 +232,13 @@ For a comprehensive step-by-step walkthrough of pipeline settings, modeling work
 *   **API Reference**: For a comprehensive list of modules, classes, and
     function signatures, refer to the [API Reference](docs/api_reference.md).
 *   **Output CSV Schema**: For detailed specifications of all output CSV files, including column names, data types, and descriptions, refer to the [Output CSV Schema](docs/output_csv_schema.md).
-*   **Interactive Sample**: Check out the
-    [Sample Jupyter Notebook](examples/IN_skincare/doubleml-pipeline_sample_notebook_IN.ipynb) which walks
-    through simulating realistic panel marketing data, engineering lagged
-    features, scaling, running the DML pipeline, and plotting the results.
+*   **Interactive Samples**: Check out the sample Jupyter notebooks
+    ([`IN_skincare`](examples/IN_skincare/doubleml-pipeline_sample_notebook_IN.ipynb)
+    and
+    [`JP_retailer`](examples/JP_retailer/doubleml-pipeline_sample_notebook_JP.ipynb)),
+    which walk through loading realistic simulated panel marketing data,
+    engineering lagged features, scaling, running the DML pipeline, and plotting
+    the results.
 
 ### Contributing & Feedback
 
