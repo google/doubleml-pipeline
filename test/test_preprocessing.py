@@ -12,15 +12,105 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for scalers in the doubleml_pipeline preprocessing module."""
+"""Tests for the ``preprocessing`` package: ``features`` and ``scalers``."""
 
 import unittest
 
+from doubleml_pipeline.preprocessing import features
 from doubleml_pipeline.preprocessing import scalers
 import pandas as pd
+import pytest
 
 
-class TestScalers(unittest.TestCase):
+class FeaturesTest(unittest.TestCase):
+  """Tests for feature engineering functions."""
+
+  def test_create_lagged_features_basic(self):
+    """Tests basic functionality of create_lagged_features."""
+    df = pd.DataFrame({
+        "date": pd.date_range(start="2020-01-01", periods=5),
+        "value": [1, 2, 3, 4, 5],
+        "geo": ["A", "A", "A", "A", "A"],
+    })
+    df_lagged = features.create_lagged_features(
+        df=df,
+        columns=["value"],
+        periods=2,
+        date_col="date",
+        unit_col="geo",
+        na_fill=True,
+    )
+
+    self.assertIn("value_l1", df_lagged.columns)
+    self.assertIn("value_l2", df_lagged.columns)
+
+    # Check first lag
+    self.assertEqual(df_lagged.iloc[1]["value_l1"], 1.0)
+    self.assertEqual(df_lagged.iloc[2]["value_l1"], 2.0)
+
+    # Check second lag
+    self.assertEqual(df_lagged.iloc[2]["value_l2"], 1.0)
+    self.assertEqual(df_lagged.iloc[3]["value_l2"], 2.0)
+
+    # Check NA fill for the first row
+    self.assertEqual(df_lagged.iloc[0]["value_l1"], 0.0)
+    self.assertEqual(df_lagged.iloc[0]["value_l2"], 0.0)
+
+  def test_create_lagged_features_multiple_unit_cols(self):
+    """Tests create_lagged_features with multiple unit_cols."""
+    df = pd.DataFrame({
+        "date": pd.to_datetime(
+            ["2020-01-01", "2020-01-02", "2020-01-01", "2020-01-02"]
+        ),
+        "value": [1, 2, 3, 4],
+        "geo1": ["A", "A", "B", "B"],
+        "geo2": ["X", "X", "Y", "Y"],
+    })
+    df_lagged = features.create_lagged_features(
+        df=df,
+        columns=["value"],
+        periods=1,
+        date_col="date",
+        unit_col=["geo1", "geo2"],
+        na_fill=True,
+    )
+
+    df_lagged = df_lagged.sort_values(by=["geo1", "geo2", "date"]).reset_index(
+        drop=True
+    )
+
+    self.assertIn("value_l1", df_lagged.columns)
+
+    # geo1="A", geo2="X", date="2020-01-01" -> no lag
+    self.assertEqual(df_lagged.iloc[0]["value_l1"], 0.0)
+    # geo1="A", geo2="X", date="2020-01-02" -> lag is 1
+    self.assertEqual(df_lagged.iloc[1]["value_l1"], 1.0)
+    # geo1="B", geo2="Y", date="2020-01-01" -> no lag
+    self.assertEqual(df_lagged.iloc[2]["value_l1"], 0.0)
+    # geo1="B", geo2="Y", date="2020-01-02" -> lag is 3
+    self.assertEqual(df_lagged.iloc[3]["value_l1"], 3.0)
+
+
+@pytest.mark.parametrize("freq", ["W-MON", "W-FRI", "W-SAT", "W-SUN"])
+def test_create_lagged_features_weekly(freq):
+  """Tests create_lagged_features with various weekly frequencies."""
+  df = pd.DataFrame({
+      "date": pd.date_range(start="2020-01-01", periods=5, freq=freq),
+      "value": [1, 2, 3, 4, 5],
+      "geo": ["A", "A", "A", "A", "A"],
+  })
+  df_lagged = features.create_lagged_features(
+      df=df,
+      columns=["value"],
+      periods=2,
+      date_col="date",
+      unit_col="geo",
+      na_fill=True,
+  )
+  assert not df_lagged.isnull().values.any()
+
+
+class ScalersTest(unittest.TestCase):
   """Test suite for causal data scaling functionality."""
 
   def test_causal_data_scaler_fit_transform(self):

@@ -10,6 +10,31 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 
 ```text
 <output_dir>/
+├── <treatment>_<outcome>_<family>.html          # Interactive HTML report (when generate_html=True)
+│                                               #   e.g. tv_spend-digital_spend_sales_power.html
+│                                               #   The `_<family>` segment is omitted when saturation is off.
+├── metadata.json                               # Run configuration consumed by the HTML report builder
+│
+├── step0_saturation/                           # Phase 0: Saturation-aware setup (saturation block present)
+│   │                                           #   (alpha_selection.output_dir; per-treatment subdirs if >1 treatment)
+│   │                                           #   prefixes: summary_ = result, diag1_..diag6_ = identification diagnostics, others_ = supporting
+│   ├── summary_alpha_selection.json            # Phase 0 summary: decision, decision_reason, selected_family, alpha_hat, T_1/2, T_ref, se, r_T, ...
+│   ├── summary_alpha_grid.csv                  # Per grid point: alpha, T_1/2, mean_r_loss, se_alpha, in_1se_set, fbar quantiles, eps(J)
+│   ├── summary_rloss_curves.csv                # Per-seed CATE / ATE / identity-candidate R-loss curves
+│   ├── summary_alpha_profile_<treatment>.png   # 2+2+1 panels: grid construction | seed-wise alpha distribution / R-loss curve | fitted saturation curve (FINAL) / key stats
+│   ├── summary_alpha_seed-wise_alpha_distribution.csv  # Per-seed argmin alpha_hat_s and paired difference d_s (the seed-wise panel's data)
+│   ├── summary_alpha_selection.csv             # Selected alpha_hat and the Diag1-Diag5 flags per treatment
+│   ├── summary_phase0_diagnostics.json         # Cluster-key plan, top-level split sizes, and all warnings
+│   ├── diag1_basis_approx_error.png            # Diag1: eps(J) per grid alpha vs basis_tol
+│   ├── diag2_rloss_profile.png                 # Diag2: R-loss profile vs T_1/2 with the identity-candidate level, the 1-SE set and the decision
+│   ├── diag3_identification_diagnostics.csv    # Diag3: r_T, treatment-support statistics, T_max, T_ref
+│   ├── diag4_f_transform_quantiles.png         # Diag4: phi_p(alpha) = fbar(q_p(T>0); alpha), p = 25/50/75/90, with the linear references q_p / T_ref
+│   ├── diag5_saturation_at_T_ref.png           # Diag5 (tanh / exp only): kappa(alpha) = f(T_ref; alpha) over the grid
+│   ├── diag6_t_ref_consistency.csv             # Diag6 (written at Phase 1 start): T_ref^(0) vs T_ref^(1), pass / fail / skipped
+│   ├── others_split_coverage.csv               # Per key level: #cells in sel / inf and #Stage B folds covered
+│   ├── others_split_coverage_detail.csv        # Stage B fold per (seed, cell) + Stage A split, with both key values
+│   └── others_split_coverage.png               # Bar chart of n_cells_sel / n_cells_inf per key level (from others_split_coverage.csv)
+│
 ├── step1_exploration_<treatment_name>/          # Phase 1: Candidate exploration per treatment
 │   ├── 1a_full_df_<model_name>.csv             # Row-level dataset with out-of-fold predictions & CIs
 │   ├── 1b_geo_item_<model_name>.csv            # Aggregated metrics grouped by Geo and/or Item
@@ -36,7 +61,7 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
     │   ├── 006_updated_prior/
     │   │   └── prior_parameters.csv            # Parametric prior distributions (Normal, LogNormal, Beta)
     │   └── 007_optimization/
-    │       └── optimization_metrics.csv        # ROI threshold reallocation simulation
+    │       └── optimization_metrics.csv        # Budget allocation metrics (ROI-threshold simulation or the KKT allocation)
     └── graph/
         ├── 004_cate/
         │   └── cate_coef_dict_pooling.csv      # CATE basis spline coefficients, SEs, and p-values
@@ -45,7 +70,14 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
         ├── 006_sensitivity/
         │   └── sensitivity_metrics.csv         # Cinelli-Hazlett (2020) OVB robustness values
         └── 007_optimization/
-            └── optimization_metrics.csv        # Spend optimization metrics (when optimize=True)
+            ├── optimization_metrics.csv        # Spend optimization metrics (when optimize=True)
+            ├── optimization_yearly_summary.csv # Yearly before / after spend, incremental KPI and ROI (the HTML matrix)
+            ├── <prefix>_timeseries_spend_vs_est.png                      # Simple optimizer: spend, estimated KPI and the optimized spend
+            ├── <prefix>_timeseries_spend_before_after.png                # Both optimizers: purple spend before / dark green after
+            ├── <prefix>_timeseries_incremental_effect_before_after.png   # Both optimizers: red incremental effect before / blue after
+            ├── <prefix>_timeseries_roi_before_after.png                  # Both optimizers: red ROI per date before / blue after
+            ├── <prefix>_original_vs_optimal_treatment.png  # Saturation optimizer: purple original vs green optimal treatment
+            └── <prefix>_<outcome>.png           # Both optimizers: red original KPI vs blue projected total KPI under the optimized spend
 ```
 
 ---
@@ -54,29 +86,205 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 
 | # | File Name | Location Pattern | Generation Condition | Purpose |
 |---|---|---|---|---|
-| 1 | `1a_full_df_<model>.csv` | `step1_exploration_<treatment>/` | `process_log != "lightweight"` | Observation-level nuisance predictions, residuals, and unpooled incremental KPI. |
-| 2 | `1b_geo_item_<model>.csv` | `step1_exploration_<treatment>/` | Every exploration run | Sliced performance aggregated by Geo and/or Item dimensions for candidate model. |
-| 3 | `1c_metrics_<model>.csv` | `step1_exploration_<treatment>/` | Every exploration run | Single-row evaluation metrics, AutoML nuisance losses ($Y, T$), and ground truth validation. |
-| 4 | `2_shortlisted_models_metrics.csv` | `step2_shortlisted_<treatment>/` | Phase 2 completion | Ranked candidates by `combined_error` with `shortlisted` flag for top $N$. |
-| 5 | `3a_iteration_detail.csv` | `step3_final_<treatment>/` | Phase 3 completion | All $n_{\text{reps}}$ repetitions for shortlisted models with intra-group normalized losses. |
-| 6 | `3b_iteration_summary.csv` | `step3_final_<treatment>/` | Phase 3 completion | Model group summary with mean/SD errors and winning group selection (`best_model = 1`). |
-| 7 | `3c_best_1a_df_<model>.csv` | `step3_final_<treatment>/best_model/` | Phase 3 completion | Observation-level dataset using Chernozhukov repeated cross-fitting pooled median and CIs. |
-| 8 | `3c_best_1b_geo_item_<model>.csv` | `step3_final_<treatment>/best_model/` | Phase 3 completion | Geo/Item aggregated performance of the winning pooled model. |
-| 9 | `consolidated_1a_full_df.csv` | `step4_consolidated_results/` | Phase 4 completion | Master observation-level table combining all treatments, incremental KPIs, portfolio totals, and ROIs. |
-| 10 | `consolidated_3a_detail.csv` | `step4_consolidated_results/` | Phase 4 completion | Concatenation of Phase 3 repetition details for winning models across all treatments. |
-| 11 | `consolidated_3b_summary.csv` | `step4_consolidated_results/` | Phase 4 completion | Portfolio-level summary across all treatments plus an aggregated `"Total"` row. |
-| 12 | `consolidated_3b_summary_geo.csv` | `step4_consolidated_results/` | `geo_col` provided | Geographic slice summary with individual treatment channels and entity totals. |
-| 13 | `consolidated_3b_summary_item.csv` | `step4_consolidated_results/` | `item_col` provided | Product/Item slice summary with individual treatment channels and entity totals. |
-| 14 | `cate_coef_dict_pooling.csv` | `step4_consolidated_results/graph/004_cate/` | CATE covariates configured | Basis spline regression coefficients, standard errors, and p-values per repetition and pooled. |
-| 15 | `prior_parameters.csv` | `graph/005_prior/` or `roi_output/.../006_updated_prior/` | Default | Fitted parametric prior distributions (Normal, LogNormal, Beta) for MMM integration. |
-| 16 | `sensitivity_metrics.csv` | `step4_consolidated_results/graph/006_sensitivity/` | `run_sensitivity=True` | Cinelli & Hazlett (2020) Omitted Variable Bias (OVB) robustness values ($RV$) and benchmarks. |
-| 17 | `optimization_metrics.csv` | `007_optimization/` | `optimize=True` & single treatment | Simulation of budget cuts on sub-threshold ROI cells and potential reinvestment increase. |
+| 1 | `summary_alpha_selection.csv` | `step0_saturation/` | `saturation.family` set | Selected `alpha_hat`, the Diag1–Diag5 flags, and compute accounting per treatment. |
+| 2 | `summary_alpha_grid.csv` | `step0_saturation/` (per-treatment subdir if > 1 treatment) | `saturation.family` set | One row per grid point: `alpha`, `half_saturation_T`, the profiled R-loss `mean_r_loss`, the Diag2 `se_alpha` / `in_1se_set`, the Diag4 `fbar_q*` and the Diag1 `basis_approx_error_alpha` (replaces the former `alpha_profile_<treatment>.csv`). |
+| 3 | `1a_full_df_<model>.csv` | `step1_exploration_<treatment>/` | `process_log != "lightweight"` | Observation-level nuisance predictions, residuals, and unpooled incremental KPI. |
+| 4 | `1b_geo_item_<model>.csv` | `step1_exploration_<treatment>/` | Every exploration run | Sliced performance aggregated by Geo and/or Item dimensions for candidate model. |
+| 5 | `1c_metrics_<model>.csv` | `step1_exploration_<treatment>/` | Every exploration run | Single-row evaluation metrics, AutoML nuisance losses ($Y, T$), and ground truth validation. |
+| 6 | `2_shortlisted_models_metrics.csv` | `step2_shortlisted_<treatment>/` | Phase 2 completion | Ranked candidates by `combined_error` with `shortlisted` flag for top $N$. |
+| 7 | `3a_iteration_detail.csv` | `step3_final_<treatment>/` | Phase 3 completion | All $n_{\text{reps}}$ repetitions for shortlisted models with intra-group normalized losses. |
+| 8 | `3b_iteration_summary.csv` | `step3_final_<treatment>/` | Phase 3 completion | Model group summary with mean/SD errors and winning group selection (`best_model = 1`). |
+| 9 | `3c_best_1a_df_<model>.csv` | `step3_final_<treatment>/best_model/` | Phase 3 completion | Observation-level dataset using Chernozhukov repeated cross-fitting pooled median and CIs. |
+| 10 | `3c_best_1b_geo_item_<model>.csv` | `step3_final_<treatment>/best_model/` | Phase 3 completion | Geo/Item aggregated performance of the winning pooled model. |
+| 11 | `consolidated_1a_full_df.csv` | `step4_consolidated_results/` | Phase 4 completion | Master observation-level table combining all treatments, incremental KPIs, portfolio totals, and ROIs. |
+| 12 | `consolidated_3a_detail.csv` | `step4_consolidated_results/` | Phase 4 completion | Concatenation of Phase 3 repetition details for winning models across all treatments. |
+| 13 | `consolidated_3b_summary.csv` | `step4_consolidated_results/` | Phase 4 completion | Portfolio-level summary across all treatments plus an aggregated `"Total"` row. |
+| 14 | `consolidated_3b_summary_geo.csv` | `step4_consolidated_results/` | `geo_col` provided | Geographic slice summary with individual treatment channels and entity totals. |
+| 15 | `consolidated_3b_summary_item.csv` | `step4_consolidated_results/` | `item_col` provided | Product/Item slice summary with individual treatment channels and entity totals. |
+| 16 | `cate_coef_dict_pooling.csv` | `step4_consolidated_results/graph/004_cate/` | CATE covariates configured | Basis spline regression coefficients, standard errors, and p-values per repetition and pooled. |
+| 17 | `prior_parameters.csv` | `graph/005_prior/` or `roi_output/.../006_updated_prior/` | Default | Fitted parametric prior distributions (Normal, LogNormal, Beta) for MMM integration. |
+| 18 | `sensitivity_metrics.csv` | `step4_consolidated_results/graph/006_sensitivity/` | `run_sensitivity=True` | Cinelli & Hazlett (2020) Omitted Variable Bias (OVB) robustness values ($RV$) and benchmarks. |
+| 19 | `optimization_metrics.csv` | `007_optimization/` | `optimize=True` & single treatment | Budget simulation: cuts on sub-threshold ROI cells (`simple_optimization=True`) or the KKT allocation statistics (saturation). |
+| 20 | `optimization_yearly_summary.csv` | `007_optimization/` | `optimize=True` & single treatment | Per dimension (total / geo / item) and calendar year plus `Total`: spend, incremental KPI and ROI before and after the optimization (both optimizers). Rendered as the yearly matrix of the HTML optimization tabs. |
 
 ---
 
 ## 3. Detailed File Schemas
 
-### 3.1. Phase 1: Exploration Outputs
+### 3.1. Phase 0: Saturation-Aware Setup Outputs
+
+These files are only produced when a `saturation` block is supplied (Saturation
+DML; `family` defaults to `tanh` inside the block). `alpha` is estimated against
+the **normalized** treatment $\tilde{T} = T / c$, so every alpha,
+`half_saturation_T`, `T_ref` and `T_max` below is on the normalized scale. The
+directory name is `alpha_selection.output_dir` (default `step0_saturation`).
+With more than one treatment, the Phase 0 files go to
+`step0_saturation/<treatment>/`.
+
+Every candidate curve is normalized through the reference point
+$(T_{\text{ref}}, 1)$ with $T_{\text{ref}} = q_{0.95}(\tilde{T} \mid
+\tilde{T} > 0)$ computed once on the full fitting data:
+$\bar f(T; \alpha) = f(T; \alpha) / f(T_{\text{ref}}; \alpha)$, and the identity
+candidate is $\bar f_T = T / T_{\text{ref}}$. Phases 1–3 regress on
+$\bar f(\tilde{T}; \hat\alpha)$, so the estimated $\theta$ is the effect of one
+$T_{\text{ref}}$ worth of treatment; Phases 1–3 and Phase 4 read `T_ref` from
+`summary_alpha_selection.json`.
+
+#### `summary_alpha_selection.json`
+
+| Key | Type | Description |
+|---|---|---|
+| `family` | string | Configured family (`tanh`, `exp`, `log`, `power`). |
+| `selected_family` | string / null | Family used downstream. `null` means linear was adopted (by the 1-SE test or the upper-edge rule) and Phase 4 falls back to linear optimization. |
+| `alpha_hat` | float | Alpha used downstream. When Diag1 or Diag2 fired and `alpha_selection.fallback_half_saturation_T` is set, this is the alpha implied by that fixed half-saturation point (`T_knee` for `log`, alpha itself for `power`); otherwise the Stage B estimate. |
+| `alpha_grid_argmin`, `rloss_min` | float | Grid argmin before Brent refinement, and $\bar L(\hat\alpha)$. |
+| `half_saturation_T` | float / null | Grid variable implied by `alpha_hat`: `T_1/2` with `fbar(T_1/2) = 0.5 fbar(infinity)` for `tanh` / `exp`; the knee point `T_knee = alpha` for `log` (an unbounded curve has no half-saturation point). `null` for `power`. |
+| `refine_method` | string | `brent` if Brent moved `alpha_hat` off the grid, otherwise `none`. |
+| `d_bar`, `se` | float | Mean paired R-loss difference $\bar d = \bar L(\hat\alpha) - \bar L_T$ against the identity candidate and its standard error. `se` is the single cluster-robust `se_obs` of the 1-SE test (CR1 on the adopted key with fewer clusters, over the per-observation differences $d_i$); there is no across-seed standard error. |
+| `linear_test_k` | float | `k` in the rule "adopt saturation iff `d_bar < -k*se`". |
+| `decision` | string | `saturation` or `linear`. |
+| `decision_reason` | string | `1se_pass` (test passed, saturation adopted), `1se_fail` (test failed, linear) or `grid_edge_upper` (`alpha_hat` still on the upper / linear-side edge after `max_extensions` extensions: linear regardless of the test). |
+| `diag1_fired` | bool | Diag1: `basis_approx_error` $= \varepsilon(J) \geq$ `basis_tol` on the final grid (`J` is fixed on the initial grid and $\varepsilon(J)$ is recomputed after every extension). Warning only. |
+| `J`, `basis_approx_error` | int, float | Diag1 inputs: T-basis size and its worst-case relative RMS error of projecting `fbar` on the fixed 500-point grid over `[0, T_max]` . |
+| `diag2_fired`, `diag2_ratio` | bool, float | Diag2: `diag2_ratio` = max / min of the half-saturation points over the 1-SE set $A_{1SE} = \{\alpha : \bar L(\alpha) - \bar L(\hat\alpha) \leq se(\alpha)\}$ ($T_{knee}$ for `log`; the alpha range for `power`, compared with 0.4); fires when it exceeds `alpha_selection.flatness_ratio` (10). Warning when a family is adopted, INFO otherwise. |
+| `r_T` | float | Diag3: `sd(T - m_T(X)) / sd(T)`, computed out of fold, with $\hat m_T$ the identity-candidate nuisance. |
+| `fbar_q25`, `fbar_q50`, `fbar_q75`, `fbar_q90` | float | Diag4: $\phi_p(\hat\alpha) = \bar f(q_p(T \mid T > 0); \hat\alpha)$ for $p = 25, 50, 75, 90$. |
+| `linear_ref_q25`, …, `linear_ref_q90` | float | Diag4 linear references $q_p(T \mid T > 0) / T_{\text{ref}}$ (the identity candidate at the same quantiles). |
+| `saturation_at_T_ref` | float / null | Diag5: $\kappa(\hat\alpha) = f(T_{\text{ref}}; \hat\alpha) / f(\infty; \hat\alpha)$ for the bounded families `tanh` / `exp`; `null` for `log` / `power`. |
+| `grid_mode` | string | Grid mode (`auto` / `manual`). |
+| `grid_extensions` | int | Number of automatic x4 grid extensions. |
+| `grid_edge_hit` | string | `none`, `upper` (linear side; forces `selected_family = null`) or `lower` (warning only). |
+| `T_ref` | float | Reference point of the normalization, normalized scale. |
+| `T_max` | float | Upper end of the B-spline domain: the 99.9 % quantile of `T > 0` of the full fitting data, on the same scale (rows above it are clipped by the basis only); see also the extras `T_max_quantile`, `T_max_observed_sel`, `n_rows_above_T_max`. |
+| `cluster_keys`, `cluster_fallback_tier` | list, string | Cluster-key decision (adopted keys and fallback tier). |
+| `n_sel`, `n_inf`, `n_seeds`, `k_folds` | int | Sizes. |
+| `learners` | object | Y/T learner classes and main hyperparameters, including any XGBoost fallback. |
+| extras | — | `treatment`, `se_cluster_key`; the se of the 1-SE decision: `se_method` (`two-way` on the two adopted keys / `one-way` on `se_cluster_key` / `iid`), `se_cluster_keys`, `se_one_way`, `se_two_way` (`null` without two keys), `se_df` (clusters − 1), `linear_test_t_critical`, `critical_value` (the multiplier of `se` actually used), `decision_under_one_way_se`; the basis conditioning `basis_cond`, `basis_ill_conditioned`, `T_max_quantile`, `T_max_observed_sel`, `n_rows_above_T_max`; `alpha_hat_estimated` (the Stage B estimate before any fallback), `flatness_ratio` (the Diag2 threshold in force), `basis_tol` (the Diag1 tolerance), `fallback_half_saturation_T_used`, `grid_edge_unresolved`, `basis_mode`, `normalization`, `n_ml_fits`, `t_ref_quantile`, `T_ref_raw` (`c * T_ref` in raw treatment units; `null` when `c` varies by row), `grid_variable` (`T_half` / `T_knee` / `alpha`), `messages`; the meaning of the `T/c` scale: `divisor_constant` (the scalar of the formula: `median(T \| T != 0)` under `median_normalize`, `median(T/population \| > 0)` under `population_median_normalize`, `1` otherwise), `divisor_population_col` (the population column, population mode only), `divisor_formula` (e.g. `c = median(spend \| spend != 0) = 28.38` or `c_i = population_i x median(spend/population \| spend/population > 0) = population_i x 0.0021`), `divisor_description` (one sentence, e.g. `T/c = spend / 28.38: the treatment divided by the median of its non-zero values (…, so T/c = 1 is the typical non-zero row).`); after Phase 4, `phase4_optimization` (`saturation` / `linear_fallback`), the fallback reason and its decision basis (`phase4_fallback_decision_reason` = the Phase 0 `decision_reason`, `phase4_fallback_d_bar`, `phase4_fallback_se`, `phase4_fallback_linear_test_k`). |
+
+NaN / inf values are written as `null`.
+
+#### `metadata.json` — `cluster_dml` block (every run)
+
+`step4_consolidated_results/metadata.json` carries, for **every** run — with or
+without a `saturation` block — the Cluster DML key decision of the cluster-key
+determination rule, so users can see which keys the 2-way Cluster DML actually
+clustered on:
+
+| Key | Meaning |
+|---|---|
+| `applies_to`, `rule` | Plain-language statement of the rule (candidates `item_col`, `geo_col` and a derived contiguous date block built from `date_col`; the two candidates with the most clusters are adopted). |
+| `keys`, `n_way`, `primary_key`, `keys_used` | The adopted keys (e.g. `["cluster_date_block", "geo"]`), how many, the primary (most clusters) one, and the keys actually passed to DoubleML for the Phase 1–3 fits. |
+| `cluster_counts`, `candidate_counts`, `not_adopted` | Cluster counts of the adopted keys, of every candidate, and the candidates that were rejected with their counts (e.g. `{"item": 2}`). |
+| `date_block_granularity`, `derived_columns` | Granularity of the derived date block and the helper column names. |
+| `visualization_cols` | `date_col`, `item_col`, `geo_col` with a note that they remain the dimensions of every chart and summary CSV regardless of the cluster keys. |
+| `messages` | Diagnostics of the rule (e.g. why a candidate was dropped). |
+
+#### CSV files
+
+Every Phase 0 file name carries a prefix: `summary_` (the result of the alpha
+selection), `diag1_` … `diag6_` (the identification diagnostics) or `others_`
+(supporting material without a diagnostic rule). The names are the constants
+of `doubleml_pipeline.utils.io`.
+
+| File | Columns |
+|---|---|
+| `summary_alpha_grid.csv` | `grid_index`, `half_saturation_T`, `alpha`, `mean_r_loss` (the seed-averaged profiled R-loss $\bar L(\alpha)$), `se_alpha` (the Diag2 $\widehat{se}(\alpha)$: cluster-robust SE of the paired loss difference against $\hat\alpha$), `in_1se_set` (membership in the Diag2 set $A_{1SE} = \{\alpha : \bar L(\alpha) - \bar L(\hat\alpha) \leq \widehat{se}(\alpha)\}$), `fbar_q25`, `fbar_q50`, `fbar_q75`, `fbar_q90` (Diag4 $\phi_p(\alpha) = \bar f(q_p(T \mid T > 0); \alpha)$ per grid point), `basis_approx_error_alpha` (Diag1 $\varepsilon(J)$ per grid point). See the detailed schema below. |
+| `summary_rloss_curves.csv` | `seed`, `grid_index`, `alpha`, `rloss_cate`, `rloss_ate`, `rloss_identity` ($\hat L_{s,T}$ of the identity candidate; constant within a seed) |
+| `summary_alpha_seed-wise_alpha_distribution.csv` | `seed`, `alpha_hat_s`, `rloss_at_alpha_hat_s`, `rloss_identity_s`, `d_s` ($= \hat L_s(\hat\alpha) - \hat L_{s,T}$); the data behind the seed-wise alpha distribution panel of `summary_alpha_profile_<treatment>.png` |
+| `others_split_coverage_detail.csv` | `seed`, `cluster_id` (id of the split unit: the intersection cell `"<key1>\|<key2>"` of the two adopted keys under a cell split, the single key value under the single-key split), `key1_value`, `key2_value` (the cell's two key values; empty when the split is not cell-level), `fold` (`-1` for `D_inf` cells), `split` (`sel` / `inf`; `mixed` only under the observation-level fallback) |
+| `others_split_coverage.csv` | One row per level of each adopted key: `key`, `level`, `n_cells_sel`, `n_cells_inf`, `covered` (both ≥ 1, i.e. the coverage guarantee holds for this level), `n_folds_covered_min` (minimum over seeds of the number of Stage B folds the level appears in), `fold_covered` (`n_folds_covered_min == K`). Under the single-key split every level sits on one side only (`covered = False`); header only under the observation-level fallback. Visualized by `others_split_coverage.png`. |
+| `diag3_identification_diagnostics.csv` | `r_T`, `sd_T`, `sd_T_resid`, `share_T_zero`, `q50_T_pos`, `q95_T_pos`, `T_max`, `T_ref`  |
+| `diag6_t_ref_consistency.csv` | Written at the start of Phase 1, one row per treatment: `treatment`, `status` (`pass` / `fail` / `skipped` — skipped when `selected_family = None`, since the treatment is not transformed), `T_ref_phase0` (the `T_ref` of `summary_alpha_selection.json`), `T_ref_phase1` (recomputed as $q_{95}(T \mid T > 0)$ from the column Phase 1 received), `rel_error`, `t_ref_tolerance`, `t_ref_quantile`, `n_rows_phase1`, `note`. A `fail` row is written before the run stops with `TRefMismatchError`. |
+
+The figures are those of the Phase 0 output set and every one ends with a
+footnote that explains its annotations and names the CSV columns / JSON keys
+behind them:
+`summary_alpha_profile_<treatment>.png` (the 2 + 2 + 1 panel summary: grid
+construction — `T > 0` histogram with `q50`, `q95 = T_ref` and the grid —,
+seed-wise alpha distribution, profiled R-loss curve, the fitted normalized
+`fbar` curve with the identity candidate `fbar_T = T / T_ref`, the point
+`(T_ref, 1)`, the shapes of the smallest / median / largest grid alpha and the
+curve Phases 1–4 actually use labelled **FINAL**, and the key stats;
+the footnote defines `T_ref`, `q05 / q50 / q95` and the grid ends
+`0.25*q50` / `4*q95`),
+`diag1_basis_approx_error.png` ($\varepsilon(J)$ per alpha against `basis_tol`),
+`diag2_rloss_profile.png` (shades the Diag2 set $A_{1SE}$ point by point and
+draws the identity-candidate level $\bar L_T$),
+`diag4_f_transform_quantiles.png` (the four Diag4 curves $\phi_p(\alpha)$ with
+their linear references),
+`diag5_saturation_at_T_ref.png` ($\kappa(\alpha) = f(T_{\text{ref}}; \alpha)$;
+`tanh` / `exp` only) and `others_split_coverage.png` (`n_cells_sel` /
+`n_cells_inf` per key level).
+
+#### `summary_alpha_selection.csv`
+
+* **Path**: `step0_saturation/summary_alpha_selection.csv`
+* **Generated when**: a `saturation` block is present.
+* **Description**: One row per treatment summarising the Stage B profiled R-loss minimization: the selected exponent, the Diag1–Diag5 flags, and the realised compute.
+
+| Column Name | Type | Example | Description |
+|---|---|---|---|
+| `treatment` | `string` | `spend` | Treatment column the row refers to. |
+| `family` | `string` | `tanh` | Saturation family: `tanh`, `exp`, `log` or `power`. |
+| `selected_family` | `string` | `tanh` | Family used downstream; empty when linear was adopted. |
+| `decision` | `string` | `saturation` | Outcome of the 1-SE comparison against the identity candidate. |
+| `decision_reason` | `string` | `1se_pass` | `1se_pass`, `1se_fail` or `grid_edge_upper`. |
+| `grid_edge_hit` | `string` | `none` | `none`, `upper` or `lower`. |
+| `T_ref` | `float64` | `2.31` | Reference point of the normalization (normalized scale). |
+| `alpha_hat` | `float64` | `0.8` | Selected saturation exponent used by Phases 1–3. |
+| `alpha_hat_grid` | `float64` | `0.8` | Grid argmin before any Brent refinement. |
+| `brent_refined` | `bool` | `False` | Whether `refine="brent"` moved `alpha_hat` off the grid. |
+| `fallback_half_saturation_T_used` | `bool` | `False` | `True` when Diag1 or Diag2 fired and `alpha_selection.fallback_half_saturation_T` replaced the estimate. |
+| `ml_model_Y` | `string` | `rf` | Learner chosen for the outcome nuisance $\hat{\ell}(X)$. |
+| `ml_model_T` | `string` | `rf` | Learner chosen for the (multi-output) treatment-basis nuisance. |
+| `diag1_fired` | `bool` | `False` | Diag1: basis approximation error $\varepsilon(J) \geq$ `basis_tol` on the final grid. |
+| `diag2_fired` | `bool` | `False` | Diag2: half-saturation spread over the 1-SE set exceeds `flatness_ratio`. |
+| `diag2_ratio` | `float64` | `1.8` | The Diag2 spread (max / min of the half-saturation points over $A_{1SE}$; alpha range for `power`). |
+| `r_T` | `float64` | `0.42` | Diag3: residual treatment-variation ratio $sd(T - \hat m_T(X)) / sd(T)$. |
+| `saturation_at_T_ref` | `float64` | `0.97` | Diag5: $\kappa(\hat\alpha) = f(T_{\text{ref}}; \hat\alpha) / f(\infty; \hat\alpha)$; empty for `log` / `power`. |
+| `normalization` | `string` | `median_normalize` | The divisive normalization defining `c`; `none` means raw treatment units. |
+| `n_ml_fits` | `int64` | `32` | Realised ML fit count: $N_y + N_t + 2 \cdot S \cdot K$. |
+| `multioutput_native` | `bool` | `True` | `False` when the treatment learner fell back to one fit per basis function. |
+
+---
+
+#### `summary_alpha_grid.csv`
+
+* **Path**: `step0_saturation/summary_alpha_grid.csv` (per-treatment sub-directory with several treatments)
+* **Generated when**: `saturation.family` is set (always emitted, including when Diag1 / Diag2 fire).
+* **Description**: One row per point of the final alpha grid $G$ (after automatic extensions) — the raw evidence behind `alpha_hat` and the data of the R-loss profile charts (`summary_alpha_profile_<treatment>.png`, `diag2_rloss_profile.png`, `diag1_basis_approx_error.png`, `diag4_f_transform_quantiles.png`). It merges the former `alpha_profile_<treatment>.csv` (`mean_r_loss`, 1-SE flag) into the Phase 0 grid table.
+
+| Column Name | Type | Example | Description |
+|---|---|---|---|
+| `grid_index` | `int64` | `12` | Position in the final grid (increasing grid coordinate). |
+| `half_saturation_T` | `float64` | `1.83` | Grid variable of the point: $T_{1/2}$ for `tanh` / `exp`, $T_{\text{knee}}$ for `log`, empty for `power`. Normalized scale $T / c$. |
+| `alpha` | `float64` | `0.5` | Family parameter implied by the grid variable (the value Phases 1–3 use). |
+| `mean_r_loss` | `float64` | `0.7533` | Seed-averaged profiled R-loss $\bar L(\alpha) = \frac{1}{S}\sum_s \hat L_s(\alpha)$. Lower is better; `alpha_hat` is its argmin (+ Brent). |
+| `se_alpha` | `float64` | `0.0012` | Diag2 $\widehat{se}(\alpha)$: the cluster-robust SE of the per-observation paired loss difference between $\alpha$ and $\hat\alpha$ (the ±1 se band of `diag2_rloss_profile.png`). |
+| `in_1se_set` | `bool` | `True` | Whether the grid point lies in the Diag2 1-SE set $A_{1SE} = \{\alpha : \bar L(\alpha) - \bar L(\hat\alpha) \leq \widehat{se}(\alpha)\}$ (no contiguity requirement). |
+| `fbar_q25`, `fbar_q50`, `fbar_q75`, `fbar_q90` | `float64` | `0.63` | Diag4 shape quantiles $\phi_p(\alpha) = \bar f(q_p(T \mid T > 0); \alpha)$ at this grid point. |
+| `basis_approx_error_alpha` | `float64` | `2.1e-05` | Diag1 $\varepsilon(J)$ at this grid point: relative RMS error of the $J$-term T-basis approximation of $\bar f(\cdot; \alpha)$. |
+
+> [!TIP]
+> A useful sanity check is whether the argmin is **interior**. If `alpha_hat`
+> sits on the first or last grid point, the true exponent is probably outside
+> the configured grid — with a manual grid widen `saturation.grid.min` /
+> `max` and re-run (the auto grid extends itself; see `grid_extensions` and
+> `grid_edge_hit`).
+
+> [!WARNING]
+> A `mean_r_loss` column that barely varies means the profile is flat and
+> `alpha` is weakly identified, regardless of what `alpha_hat` says. Cross-check
+> `diag2_fired` / `diag2_ratio` in `summary_alpha_selection.csv`, and prefer
+> fixing the half-saturation point with
+> `alpha_selection.fallback_half_saturation_T` (used only when Diag1 or Diag2
+> fires) or narrowing the manual grid around a prior value
+> (`{"mode": "manual", "min": a_lo, "max": a_hi}`; `num >= 2` and
+> `min < max` are required).
+
+---
+
+### 3.2. Phase 1: Exploration Outputs
 
 #### `1a_full_df_<model_name>.csv`
 * **Path**: `step1_exploration_<treatment_name>/1a_full_df_<model_name>.csv`
@@ -93,6 +301,16 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 | `estimated_incremental_KPI_<d_col>` | `float64` | `1250.40` | Point estimate of incremental KPI attributable to treatment in this exploration run. |
 | `estimated_incremental_KPI_<d_col>_2.5%` | `float64` | `980.12` | Lower bound of the 95% confidence interval for incremental KPI. |
 | `estimated_incremental_KPI_<d_col>_97.5%` | `float64` | `1520.68` | Upper bound of the 95% confidence interval for incremental KPI. |
+| `estimation_sample` | `string` | `D_inf` | **Saturation runs with a Phase 0 top-level split only** (`final_fit.data = "d_inf"`). `D_inf`: the row was part of the DoubleML fit (out-of-fold nuisance predictions, CATE confidence interval from the fit). `D_sel`: the row was held out for alpha selection and is *scored* with the fitted CATE — `Y_pred` / `T_pred` are the mean of the stored fold models (honest: no fold model saw the row), and `estimated_incremental_KPI_*` with its interval come from the fitted CATE basis evaluated at the row. Absent for `family=None` runs and for `final_fit.data = "full_sample"`, where every row is fitted. |
+
+> [!NOTE]
+> Every per-row output (`1a_full_df_*`, `3a_full_df_*`,
+> `consolidated_1a_full_df.csv`) and every aggregate built from them (`1b`,
+> `3b`, `step4_consolidated_results/`
+> charts and `optimization_metrics.csv`) covers **all** input rows: `D_inf` rows
+> fitted plus `D_sel` rows scored. Only the DoubleML fit itself, the Phase 2
+> shortlist and the sensitivity analysis are restricted to the fitted rows
+> (`number_of_observations` / `number_of_fitted_rows`).
 
 ---
 
@@ -154,15 +372,38 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 | `rep_total_input` | `float64` | `1540.2` | Total treatment input in this repetition. |
 | `rep_total_kpi` | `float64` | `432000.5` | Total estimated incremental KPI in this repetition. |
 | `rep_total_sales` | `float64` | `12500000.0` | Total sales ($Y$) across the entire dataset. |
-| `nuisance_models_rmse_Y_model_evaluated_by_AutoML` | `float64` | `0.3421` | Best cross-validation RMSE of outcome nuisance model $\hat{\ell}(X)$ found by AutoML. |
-| `nuisance_models_rmse_T_model_evaluated_by_AutoML` | `float64` | `0.1874` | Best cross-validation RMSE of treatment nuisance model $\hat{m}(X)$ found by AutoML. |
-| `number_of_observations` | `int64` | `1560` | Number of observations $N$ used in DML estimation. |
+| `nuisance_models_rmse_Y_model_evaluated_by_AutoML` | `float64` | `0.3421` | Validation RMSE of the outcome nuisance model $\hat{\ell}(X)$ measured inside each fold's training data, averaged over the folds. `hparam_policy="per_fold"`: FLAML's `best_loss` of the fold's search; `"global"` (default): the RMSE of the fixed $\theta^*$ under the same method FLAML chose (`cv` → `KFold(5, shuffle=True)`, `holdout` → `train_test_split(test_size=0.1)`). |
+| `nuisance_models_rmse_T_model_evaluated_by_AutoML` | `float64` | `0.1874` | Same for the treatment nuisance model $\hat{m}(X)$. |
+| `number_of_observations` | `int64` | `1560` | Number of observations $N$ used in DML estimation (the fitted rows). |
+| `number_of_fitted_rows` | `int64` | `1248` | **Only when Phase 0 split the data** (`final_fit="d_inf"`): rows the DoubleML model was fitted on (`estimation_sample == "D_inf"`). |
+| `number_of_scored_rows` | `int64` | `312` | **Only when Phase 0 split the data**: held-out `D_sel` rows scored with the fitted CATE so the per-row outputs cover all `number_of_fitted_rows + number_of_scored_rows` input rows. |
 | `number_of_folds` | `int64` | `5` | Number of cross-validation folds $K$. |
 | `number_of_repetitions` | `int64` | `1` | Internal DoubleML repetitions setting. |
 
 ---
 
-### 3.2. Phase 2: Shortlisting Outputs
+#### `hparams_<treatment_name>_<learner>.json`
+
+* **Path**: `step1_exploration_<treatment_name>/hparams_<treatment_name>_<learner>.json`
+* **Generated when**: `hparam_policy="global"` (the default). One file per FLAML learner name of `ml_models_y ∪ ml_models_t`.
+* **Description**: The result of the single FLAML search per (treatment, learner) that every Phase 1 / Phase 3 fold then fits with fixed hyperparameters. A learner listed on both sides is searched twice (target $Y$ and target $D$); both results live in the same file under `sides`.
+
+| Key | Type | Description |
+|---|---|---|
+| `schema_version`, `hparam_policy`, `d_col`, `learner` | — | `1`, `"global"`, the treatment and the FLAML learner name. |
+| `context` | `object` | Traceability: `selected_family`, `alpha_hat`, `T_ref`, `decision`, `final_fit`, `treatment_variable` (`"f_bar(T)"` / `"T"`), `n_rows` (the Phases 1–3 sample), `time_budget`, `eval_method_requested` (`"auto"`), `early_stop` (`true`). |
+| `sides.<Y|T>.target_col` | `string` | `Y` for the Y side; the PLR treatment column `D` for the T side. |
+| `sides.<Y|T>.estimator_cls` | `string` | Concrete estimator class of the winner (`module.QualName`, e.g. `lightgbm.sklearn.LGBMRegressor`). |
+| `sides.<Y|T>.params` | `object` | $\theta^*$ = `automl.model.estimator.get_params()` (its `n_jobs` / `random_state` are overridden by the run's values at fit time). |
+| `sides.<Y|T>.best_loss` | `float64` | FLAML `best_loss` (validation RMSE of $\theta^*$). |
+| `sides.<Y|T>.n_trials`, `n_iterations` | `int64` | `len(automl.config_history)` and the total FLAML iterations. |
+| `sides.<Y|T>.elapsed_seconds` | `float64` | Wall-clock of the search (its stop time under `early_stop=True`). |
+| `sides.<Y|T>.eval_method` | `string` | `"cv"` or `"holdout"` as FLAML decided; it is also the validation method of the fixed fits. |
+| `sides.<Y|T>.n_rows`, `n_features`, `time_budget`, `seed`, `n_jobs`, `flaml_estimator_class` | — | Search sample size, `len(x_cols)`, $\tau$, FLAML seed, threads $h$, FLAML wrapper class. |
+
+---
+
+### 3.3. Phase 2: Shortlisting Outputs
 
 #### `2_shortlisted_models_metrics.csv`
 * **Path**: `step2_shortlisted_<treatment_name>/2_shortlisted_models_metrics.csv`
@@ -181,7 +422,7 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 
 ---
 
-### 3.3. Phase 3: Robust Ensemble Outputs
+### 3.4. Phase 3: Robust Ensemble Outputs
 
 #### `3a_iteration_detail.csv` & `consolidated_3a_detail.csv`
 * **Path**:
@@ -260,7 +501,7 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 
 ---
 
-### 3.4. Phase 4: Consolidation & Multi-Treatment Outputs
+### 3.5. Phase 4: Consolidation & Multi-Treatment Outputs
 
 #### `consolidated_1a_full_df.csv`
 * **Path**: `step4_consolidated_results/consolidated_1a_full_df.csv`
@@ -320,7 +561,7 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 
 ---
 
-### 3.5. Specialized Diagnostic & Downstream Outputs
+### 3.6. Specialized Diagnostic & Downstream Outputs
 
 #### `cate_coef_dict_pooling.csv`
 * **Path**: `step4_consolidated_results/graph/004_cate/cate_coef_dict_pooling.csv`
@@ -365,19 +606,36 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 #### `sensitivity_metrics.csv`
 * **Path**: `step4_consolidated_results/graph/006_sensitivity/sensitivity_metrics.csv`
 * **Generated when**: `run_sensitivity=True`.
-* **Description**: Quantitative summary of Cinelli & Hazlett (2020) Omitted Variable Bias (OVB) sensitivity analysis across total, geographic, and item scopes.
+* **Description**: Quantitative summary of Cinelli & Hazlett (2020) Omitted Variable Bias (OVB) sensitivity analysis across total, geographic, and item scopes. One row per contour chart.
+* **Formulas**, with $D$ the treatment variable of the PLR, $n$ the number of observations used in the estimation, $u=Y-\hat\ell$, $v=D-\hat m$ the out-of-fold residuals and $t^*_\alpha=1.96$:
+  - $\sigma^2=E[(u-\hat\theta v)^2]$, $\nu^2=1/E[v^2]$ (DoubleML `sensitivity_elements`; recomputed from `dml_model.predictions` when unavailable) and the residual-based **scale** $\sqrt{\sigma^2\nu^2}$ — a population quantity about the point estimate; the cluster-robust $\widehat{se}$ enters the sampling-error term only ($\widehat{se}\sqrt n$ is **not** used as the scale). GATE rows (geo / item) use the group's $\hat\theta_g$, $\widehat{se}_g$, $n_g$ and the group's own moments $\sigma^2_g=\mathrm{mean}_g[(u-\hat\theta_g v)^2]$, $\nu^2_g=1/\mathrm{mean}_g[v^2]$;
+  - bias bound $B(\mathrm{cf}_y,\mathrm{cf}_d)=\rho_U\sqrt{\sigma^2\nu^2}\sqrt{\mathrm{cf}_y\mathrm{cf}_d/(1-\mathrm{cf}_d)}$ and contour value $|\hat\theta|-B-t^*_\alpha\widehat{se}$;
+  - $m=|\hat\theta|-t^*_\alpha\widehat{se}$; if $m\le 0$ then $RV=0$, else $f_q=m/\sqrt{\sigma^2\nu^2}$ and $RV=\tfrac12(\sqrt{f_q^4+4f_q^2}-f_q^2)$, so the contour value at $\mathrm{cf}_y=\mathrm{cf}_d=RV$ is exactly 0 (the RV lies on the zero contour by construction).
+* **Saturation version**: when Phase 0 adopted a family the analysis runs on the Phase 1–3 PLR fitted with $D=\bar f(T;\hat\alpha)$ (no separate linear fit); `cf_d` is then the partial $R^2$ with the residual of $\bar f(T;\hat\alpha)$, the benchmark covariate is chosen by correlation with the $\bar f(T_i;\hat\alpha)$ column, and the bounds are conditional on $\hat\alpha$ (see Diag2 for shape uncertainty).
 
 | Column Name | Type | Example | Description |
 |---|---|---|---|
-| `theta` | `float64` | `2.45` | Estimated treatment effect parameter ($\hat{\theta}$) for ATE or GATE. |
-| `se` | `float64` | `0.32` | Standard error of the estimated treatment parameter. |
-| `robustness_value` | `float64` | `0.284` | Robustness Value ($RV$). The minimal strength of confounding (partial $R^2$ with $D$ and $Y$) needed to explain away the effect to zero. |
-| `benchmark_cf_d` | `float64` | `0.152` | Partial $R^2$ of the top benchmark covariate with the treatment ($R_{D \sim Z \mid X}^2$). |
-| `benchmark_cf_y` | `float64` | `0.210` | Partial $R^2$ of the top benchmark covariate with the outcome ($R_{Y \sim Z \mid X}^2$). |
+| `theta` | `float64` | `2.45` | Estimated treatment effect parameter ($\hat{\theta}$) for ATE or GATE. In the saturation version its unit is "the increment of $Y$ for moving the treatment from 0 to $T_{\mathrm{ref}}$". |
+| `se` | `float64` | `0.32` | Standard error of the estimated treatment parameter (cluster-robust). |
+| `robustness_value` | `float64` | `0.032` | Robustness Value ($RV$, $q=1$, $\alpha=0.05$) computed with the closed form above. The minimal strength of confounding (partial $R^2$ with $D$ and $Y$) needed to bring the 95% lower bound to zero. |
+| `n_obs` | `int64` | `1000` | $n$: observations used in the estimation (`dml_model.n_obs`; rows of the group for GATE). |
+| `f_q` | `float64` | `0.0329` | $(\lvert\hat\theta\rvert-t^*_\alpha\widehat{se})/\sqrt{\sigma^2\nu^2}$; `0` when the effect is not significant. |
+| `sigma2` | `float64` | `0.81` | $\sigma^2=E[(u-\hat\theta v)^2]$ (`sensitivity_elements`, median over repetitions; residual recomputation otherwise). For GATE rows the group moment $\sigma^2_g$. |
+| `nu2` | `float64` | `1.37` | $\nu^2=1/E[v^2]$; for GATE rows the group moment $\nu^2_g$. |
+| `scale` | `float64` | `1.05` | $\sqrt{\sigma^2\nu^2}$ (the bias-bound scale; equals `sqrt(sigma2 * nu2)` of the row). |
+| `benchmark_cf_d` | `float64` | `0.152` | Benchmark partial $R^2$ on the treatment side, **group-specific**: from the long / short out-of-fold residuals restricted to the row's scope, $\mathrm{cf}_{d,g}=\mathrm{clip}\big((\nu^2_g-\nu^{s2}_g)/\nu^{s2}_g,0,1\big)$ (DoubleML `gain_statistics` on the group moments; the total row equals `sensitivity_benchmark`). |
+| `benchmark_cf_y` | `float64` | `0.210` | Benchmark partial $R^2$ on the outcome side, group-specific: $\mathrm{cf}_{y,g}=\mathrm{clip}\big((\sigma^{s2}_g-\sigma^2_g)/\sigma^2_g,0,1\big)$ (superscript $s$ = short model without the benchmark covariate, fitted once per treatment on the same folds / seed / learners). |
+| `benchmark_rho` | `float64` | `0.63` | $\rho_{U,g}=\mathrm{sign}(\hat\theta^s_g-\hat\theta_g)\,\mathrm{clip}\big(\lvert\hat\theta^s_g-\hat\theta_g\rvert/\sqrt{(\sigma^{s2}_g-\sigma^2_g)(\nu^2_g-\nu^{s2}_g)},0,1\big)$ ($\hat\theta^s_g$: GATE of the short model; $\pm1$ when the denominator is 0, as in DoubleML). `NaN` when no benchmark covariate was available. |
+| `benchmark_scope` | `string` | `group` | Reference population of the benchmark point: `"whole_sample"` (total row) or `"group"` (geo / item rows). |
 | `treatment` | `string` | `discount_rate` | Treatment variable analyzed. |
 | `scope` | `string` | `geo` | Aggregation scope: `"total"`, `"geo"`, or `"item"`. |
 | `group` | `string` | `West` | Specific entity name within scope, or `"Total"`. |
-| `benchmark_covariate` | `string` | `competitor_spend` | Name of the observed covariate with highest correlation to treatment, used as an OVB benchmark. |
+| `benchmark_covariate` | `string` | `competitor_spend` | Name of the observed covariate with the highest absolute correlation with the PLR's treatment variable ($\bar f(T_i;\hat\alpha)$ in the saturation version, the raw treatment otherwise), used as an OVB benchmark. |
+| `treatment_variable` | `string` | `f_bar(T)` | $D$ of the PLR: `"f_bar(T)"` when Phase 0 adopted a family, `"T"` otherwise. |
+| `selected_family` | `string` | `tanh` | Phase 0 `selected_family` from `summary_alpha_selection.json` (`NaN` without a `saturation` block or when linear was adopted). |
+| `alpha_hat` | `float64` | `0.0167` | Phase 0 $\hat\alpha$ (from the summary JSON; `NaN` without a `saturation` block). |
+| `half_saturation_T` | `float64` | `66.0` | $T_{1/2}$ (tanh / exp), $T_{\mathrm{knee}}$ (log) or $\alpha$ (power) on the scale $T/c$ (from the summary JSON). |
+| `T_ref` | `float64` | `150.0` | $T_{\mathrm{ref}}=q_{95}(T\mid T>0)$ on the scale $T/c$ (from the summary JSON). |
 
 ---
 
@@ -402,3 +660,91 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
 | `reduction_of_cost_of_treatment` | `float64` | `120000.0` | Total cost savings: $\text{total\_cost} - \text{optimized\_total\_cost}$. |
 | `total_cost_of_other_cost_variables` | `float64` | `1200000.0` | Baseline expenditure across the specified alternative cost channels. |
 | `increase_pct_of_total_cost_of_other_cost_variables` | `float64` | `0.10` | Fractional budget increase achievable in other cost variables: $\frac{\text{reduction\_cost}}{\text{other\_cost}}$. |
+
+#### `optimization_metrics.csv` (saturation variant)
+
+* **Path**: same as above.
+* **Generated when**: `optimize=True`, `simple_optimization=False`, and a
+  `saturation` block with `family` set (Saturation DML Phase 4).
+* **Description**: One-pass **KKT budget allocation** under a
+  diminishing-returns response curve. Unlike the
+  `simple_optimization=True` variant above, spend may *increase* at some units;
+  the units are the rows of the optimization scope (`opt_geos` / `opt_items`)
+  and every unit carries the cap `T_bar_t` (largest observed treatment in its
+  geo × item cell) and, when `opt_threshold_roi > 0`, the ROI cap `T_t^r`.
+  Under `budget_mode = "fixed"` the budget is
+  `K = (1 + budget_increment) * observed total` (with `budget_reallocate=false`
+  the budget of excluded units is truncated instead of redistributed); under
+  `budget_mode = "roi_target"` every unit is set to its ROI cap and `K` is an
+  output. `threshold_roi < 0` is rejected at initialization.
+
+Carries every column from the table above, plus:
+
+| Column Name | Type | Example | Description |
+|---|---|---|---|
+| `saturation_family` | `string` | `exp` | Response family used: `tanh`, `exp`, `log` or `power`. |
+| `alpha_hat` | `float64` | `0.85` | Median saturation parameter over the rows this row aggregates, in **raw** treatment units. |
+| `alpha_hat_min` | `float64` | `0.31` | Smallest `alpha_i` over those rows. |
+| `alpha_hat_max` | `float64` | `2.04` | Largest `alpha_i` over those rows. |
+| `budget_increment` | `float64` | `0.10` | Fractional budget change applied; `0.0` means budget-neutral reallocation. Empty under `budget_mode = "roi_target"`. |
+| `incremental_KPI_<treatment>` | `float64` | `120000.0` | Observed incremental KPI attributed to the treatment. |
+| `roi_<treatment>` | `float64` | `0.24` | Observed ROI. |
+| `optimized_incremental_KPI_<treatment>` | `float64` | `141000.0` | Incremental KPI under the optimized allocation. |
+| `optimized_roi_<treatment>` | `float64` | `0.28` | ROI under the optimized allocation. |
+| `T_ref_raw` | `float64` | `312.5` | Reference point of `fbar` in raw treatment units (median over the aggregated rows). |
+| `budget_mode` | `string` | `fixed` | `fixed` or `roi_target` (a property of the whole problem). |
+| `budget_reallocate` | `bool` | `True` | Whether the budget of units excluded by the ROI threshold was redistributed (`fixed` mode only; empty otherwise). |
+| `reallocate_within` | `string` | `all` | Scope of the KKT problem: `all` (one problem over every allocation unit; spend moves across days, geos and items) or `date` (one problem per date with the per-date budget; no cross-day movement). |
+| `cap_quantile` | `float64` | `1.0` | `q` of the support cap $\bar T_t = \max(Q_q(\text{cell}_t), T_t^{\text{actual}})$, with $Q_q$ the `q`-quantile of the positive actual treatment within the geo × item cell; `1.0` = cell maximum. |
+| `assumptions` | `string` | `no_carryover` | Modelling premise of the allocation: the response of a row depends on that row's spend only (no carryover / adstock). |
+| `K` | `float64` | `550000.0` | Budget constraint of the units aggregated by this row (`fixed` mode); empty under `roi_target`. |
+| `K_out` | `float64` | `548000.0` | Allocated total $\sum_t T_t^*$ over the units of this row (under `roi_target` this is the resulting budget). |
+| `unspent_budget` | `float64` | `2000.0` | `K - K_out` over the units of this row (positive when caps bind; a geo / item row may be negative when budget was moved *into* it); empty under `roi_target`. |
+| `marginal_roi_at_optimum` | `float64` | `1.27` | $\mu^*$ of the KKT solve — the common marginal ROI of every interior unit (a property of the whole problem); under `reallocate_within = date` the median of the per-date $\mu_d^*$; empty under `roi_target`. |
+| `marginal_roi_at_optimum_min` | `float64` | `1.27` | Smallest per-date $\mu_d^*$ (equal to `marginal_roi_at_optimum` under `reallocate_within = all`); empty under `roi_target`. |
+| `marginal_roi_at_optimum_max` | `float64` | `1.27` | Largest per-date $\mu_d^*$ (equal to `marginal_roi_at_optimum` under `reallocate_within = all`); empty under `roi_target`. |
+| `n_units` | `int64` | `365` | Units aggregated by this row. |
+| `n_units_excluded_negative_roi` | `int64` | `3` | Units with $\theta_t \leq 0$ (or whose marginal ROI at zero is below the threshold) that were set to `0`. |
+| `n_units_capped_by_roi` | `int64` | `12` | Units whose allocation is bound by the ROI cap $T_t^r$ (`threshold_roi > 0`). |
+| `n_units_at_support_cap` | `int64` | `40` | Units whose allocation sits on the support cap $\bar T_t$ (`theta_t > 0`). |
+
+> [!IMPORTANT]
+> `alpha_hat_min` and `alpha_hat_max` are **equal** to `alpha_hat` in the common
+> case. They diverge only under `population_median_normalize` with `family` of
+> `exp` or `log`, where the per-row divisor `c_i = m * p_i` induces a per-row
+> `alpha_i`. This remains a **one-parameter** model — a single global alpha is
+> estimated in Phase 0 and the `alpha_i` are derived from it — so a wide
+> min/max range reflects population heterogeneity across rows, **not**
+> uncertainty in the estimate. For uncertainty, read the Phase 0 Diag1–Diag5
+> flags in `summary_alpha_selection.csv` instead.
+
+#### `optimization_yearly_summary.csv`
+
+* **Path**: next to `optimization_metrics.csv` (`graph/007_optimization/` for
+  `spend` treatments, `roi_output/<treatment>/007_optimization/` otherwise).
+* **Generated when**: `optimize=True` and a single treatment (both the simple
+  and the saturation-aware optimizer).
+* **Description**: The data behind the yearly matrix shown under the before /
+  after charts in the HTML tabs `007_optimization` and
+  `roi_output_007_optimization (<treatment>)`: for every dimension (`total`,
+  each geo, each item) and every calendar year of the data plus a `Total` row,
+  the spend, the incremental KPI and their ratio before the optimization (the
+  actual columns) and after it (the optimized columns). Rows outside
+  `opt_periods` keep their actual values after the optimization, so the yearly
+  totals describe the whole data set exactly like the time-series charts
+  (`<prefix>_timeseries_spend_before_after.png`,
+  `<prefix>_timeseries_incremental_effect_before_after.png`,
+  `<prefix>_timeseries_roi_before_after.png`).
+
+| Column Name | Type | Example | Description |
+|---|---|---|---|
+| `treatment` | `string` | `tv_spend` | Treatment being optimized. |
+| `dimension` | `string` | `geo` | `total`, `geo` or `item`. |
+| `level` | `string` | `tokyo` | The geo / item value; `all` for `total`. |
+| `year` | `string` | `2023` | Calendar year of `date_col`, or `Total` for the row aggregating every year. |
+| `spend_before` | `float64` | `500000.0` | Actual spend (`treatment_spend_cols`; the treatment itself for `spend`). |
+| `incremental_kpi_before` | `float64` | `620000.0` | Estimated incremental KPI of the actual spend. |
+| `roi_before` | `float64` | `1.24` | `incremental_kpi_before / spend_before` (`0` when the spend is `0`). |
+| `spend_after` | `float64` | `380000.0` | Optimized spend (simple optimizer: spend of the rows kept; saturation optimizer: `optimized_<treatment>_spend`). |
+| `incremental_kpi_after` | `float64` | `590000.0` | Incremental KPI under the optimized spend (simple optimizer: the KPI of the rows kept; saturation optimizer: `optimized_incremental_KPI_<treatment>`). |
+| `roi_after` | `float64` | `1.55` | `incremental_kpi_after / spend_after` (`0` when the spend is `0`). |

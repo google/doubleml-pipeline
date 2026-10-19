@@ -17,7 +17,174 @@
 import base64
 import json
 import os
+import re
+from typing import Any
+
+from doubleml_pipeline.utils import io as pipeline_io
 import pandas as pd
+
+
+def _sanitize_for_filename(value: str) -> str:
+  """Reduces a column name to characters that are safe in a filename."""
+  cleaned = re.sub(r"[^0-9A-Za-z._-]+", "_", str(value)).strip("._-")
+  return cleaned
+
+
+def _report_filename(
+    treatment_cols: list[str],
+    outcome_col: str,
+    saturation_family: str | None,
+) -> str:
+  """Builds the report filename ``<treatment>_<outcome>_<family>.html``.
+
+  Multiple treatments are joined with ``-``. The family segment is omitted
+  entirely on the legacy path where ``saturation.family`` is unset.
+
+  Args:
+    treatment_cols: The treatment columns of the run, in pipeline order.
+    outcome_col: The outcome column of the run.
+    saturation_family: The saturation family, or ``None``.
+
+  Returns:
+    The filename (not a full path).
+  """
+  treatment_part = "-".join(
+      p for p in (_sanitize_for_filename(t) for t in treatment_cols) if p
+  )
+  parts = [
+      p for p in (treatment_part, _sanitize_for_filename(outcome_col)) if p
+  ]
+  if saturation_family:
+    parts.append(_sanitize_for_filename(saturation_family))
+  if not parts:
+    return "report.html"
+  return "_".join(parts) + ".html"
+
+
+def _png_data_uri(path: str) -> str:
+  """Returns a base64 data URI for a PNG file ('' when unreadable)."""
+  try:
+    with open(path, "rb") as img_file:
+      return "data:image/png;base64," + base64.b64encode(
+          img_file.read()
+      ).decode("utf-8")
+  except OSError:
+    return ""
+
+
+def _fmt_num(value, digits: int = 4) -> str:
+  """Formats a JSON number for the descriptive block (``n/a`` for null)."""
+  if value is None:
+    return "n/a"
+  try:
+    return f"{float(value):.{digits}g}"
+  except (TypeError, ValueError):
+    return str(value)
+
+
+def _phase0_tab_html(
+    output_dir: str, phase0_meta: dict[str, dict[str, Any]]
+) -> str:
+  """Builds the ``000_saturation`` tab of the report.
+
+  Embeds ``diag2_rloss_profile.png`` and the alpha profile chart
+  ``summary_alpha_profile_<treatment>.png`` (grid construction, seed-wise
+  alpha distribution, profiled R-loss curve, fitted saturation curve and the
+  key stats) and shows ``decision``, ``decision_reason``, ``alpha_hat``,
+  ``half_saturation_T``, ``T_ref``, ``d_bar``, ``se``, ``diag2_ratio`` and
+  ``saturation_at_T_ref`` from ``summary_alpha_selection.json`` in the
+  descriptive block.
+
+  Args:
+    output_dir: The pipeline output root.
+    phase0_meta: ``metadata['saturation_phase0']`` (treatment -> info).
+
+  Returns:
+    The tab's HTML (a ``tab-content`` div).
+  """
+  blocks = []
+  for treatment, info in phase0_meta.items():
+    rel_dir = (info or {}).get("output_dir") or "step0_saturation"
+    t_dir = os.path.join(output_dir, rel_dir)
+    summary = {}
+    summary_path = os.path.join(t_dir, pipeline_io.SUMMARY_JSON)
+    if os.path.exists(summary_path):
+      try:
+        with open(summary_path, "r") as handle:
+          summary = json.load(handle)
+      except (OSError, ValueError):
+        summary = {}
+    summary = summary or dict(info or {})
+    # The log family's grid variable is T_knee.
+    t_half_label = (
+        "Marginal-effect-halving point T_knee"
+        if summary.get("family") == "log"
+        else "Half-saturation point T_1/2"
+    )
+    fields = [
+        ("Decision", summary.get("decision")),
+        ("Decision reason", summary.get("decision_reason")),
+        ("Selected family", summary.get("selected_family")),
+        ("alpha_hat", _fmt_num(summary.get("alpha_hat"), 6)),
+        (t_half_label, _fmt_num(summary.get("half_saturation_T"), 6)),
+        ("T_ref (reference point of fbar)", _fmt_num(summary.get("T_ref"), 6)),
+        # 1-SE linear test: d_bar against the identity candidate
+        # L_T; se is the cluster-robust se_obs.
+        ("d_bar (L(alpha_hat) - L_T)", _fmt_num(summary.get("d_bar"))),
+        ("se (cluster-robust se_obs)", _fmt_num(summary.get("se"))),
+        # Diag2 ratio and Diag5 saturation level.
+        (
+            "diag2_ratio (1-SE flatness, T_1/2 max/min)",
+            _fmt_num(summary.get("diag2_ratio"), 3),
+        ),
+        (
+            "saturation_at_T_ref (kappa = f(T_ref; alpha_hat))",
+            _fmt_num(summary.get("saturation_at_T_ref"), 3),
+        ),
+        ("r_T = sd(T~)/sd(T/T_ref)", _fmt_num(summary.get("r_T"), 3)),
+    ]
+    # What the "normalized treatment T/c" of alpha_hat / T_ref / the charts
+    # concretely is: the formula of the scaler divisor c and its meaning.
+    if summary.get("divisor_formula"):
+      fields.append(
+          ("Normalized treatment scale (T/c)", summary.get("divisor_formula"))
+      )
+    if summary.get("divisor_description"):
+      fields.append(("Meaning of T/c", summary.get("divisor_description")))
+    rows = " <br>".join(
+        f"<strong>{label}:</strong> {value}" for label, value in fields
+    )
+    # The alpha profile chart is written next to the per-treatment folder
+    # (directly in step0_saturation/ with several treatments), so look in
+    # both places.
+    profile_name = pipeline_io.alpha_profile_png(treatment)
+    profile_candidates = [
+        os.path.join(t_dir, profile_name),
+        os.path.join(os.path.dirname(t_dir.rstrip(os.sep)), profile_name),
+    ]
+    profile_path = next(
+        (p for p in profile_candidates if os.path.exists(p)),
+        profile_candidates[0],
+    )
+    image_paths = [
+        os.path.join(t_dir, pipeline_io.DIAG2_RLOSS_PROFILE_PNG),
+        profile_path,
+    ]
+    images = "".join(
+        f'<img class="chart-img" src="{_png_data_uri(p)}"'
+        ' onclick="expandImage(this.src)"'
+        " onerror=\"this.style.display='none'\">"
+        for p in image_paths
+    )
+    blocks.append(
+        f"<h4>{treatment}</h4><div class=\"row-mid\">{rows}</div>{images}"
+    )
+  return (
+      '\n    <div id="tab_000_saturation" class="tab-content">\n'
+      "        <h3>Phase 0: Saturation / Alpha Selection</h3>\n        "
+      + "".join(blocks)
+      + "\n    </div>\n"
+  )
 
 
 def generate_html_report(output_dir: str) -> str | None:
@@ -77,6 +244,34 @@ def generate_html_report(output_dir: str) -> str | None:
   ground_truth_metrics = metadata.get("ground_truth_metrics")
   optimization = metadata.get("optimization", True)
   sensitivity_scope = metadata.get("sensitivity_scope", ["total"])
+  saturation_family = metadata.get("saturation_family")
+  # Only present when a family is configured,
+  # so legacy (family=None) reports render exactly as before.
+  saturation_phase0 = metadata.get("saturation_phase0") or {}
+  phase4_optimization = metadata.get("phase4_optimization") or {}
+  # The Cluster DML keys (selected automatically for every run,
+  # with or without saturation_config).  Older metadata files have no block,
+  # in which case the header line is simply omitted.
+  cluster_dml = metadata.get("cluster_dml") or {}
+  cluster_keys_html = ""
+  if cluster_dml:
+    counts = cluster_dml.get("cluster_counts") or {}
+    used = cluster_dml.get("keys_used") or cluster_dml.get("keys") or []
+    if used:
+      used_txt = ", ".join(f"{k} ({counts.get(k, '?')} clusters)" for k in used)
+      used_txt = f"{len(used)}-way: {used_txt}"
+    else:
+      used_txt = "none (observation-level inference)"
+    rejected = cluster_dml.get("not_adopted") or {}
+    if rejected:
+      used_txt += " | not adopted: " + ", ".join(
+          f"{k} ({n} clusters)" for k, n in rejected.items()
+      )
+    cluster_keys_html = (
+        "<strong>Cluster DML Keys (auto-selected; date/geo/item cols above"
+        f" stay the visualization dimensions):</strong> {used_txt} <br>\n"
+        "            "
+    )
 
   summary_csv_path = os.path.join(
       output_dir,
@@ -377,6 +572,10 @@ def generate_html_report(output_dir: str) -> str | None:
       for _, row in df.iterrows():
         geo = str(row.get("target_geo", "all"))
         item = str(row.get("target_item", "all"))
+        if geo != "all" and item != "all":
+          # geo x item combinations have no selector entry; keying them as
+          # `geo:<geo>` would overwrite the geo-level row.
+          continue
         key = "total"
         if geo != "all":
           key = f"geo:{geo}"
@@ -413,6 +612,48 @@ def generate_html_report(output_dir: str) -> str | None:
             ),
             "increase_pct": increase_pct_str,
         }
+
+        # Saturation-only fields. They are attached ONLY when the
+        # optimizer wrote them, so legacy reports render exactly as before.
+        treatment_name = str(row.get("treatment", "")).strip()
+        extra_specs = [
+            ("inc_kpi", f"incremental_KPI_{treatment_name}"),
+            ("roi", f"roi_{treatment_name}"),
+            ("opt_inc_kpi", f"optimized_incremental_KPI_{treatment_name}"),
+            ("opt_roi", f"optimized_roi_{treatment_name}"),
+        ]
+        if treatment_name:
+          for out_key, col_name in extra_specs:
+            if col_name in df.columns and pd.notnull(row.get(col_name)):
+              metrics[key][out_key] = float(row[col_name])
+        # Keys whose values are free-form text; every other key is numeric.
+        string_keys = frozenset(
+            {"sat_family", "budget_mode", "reallocate_within", "assumptions"}
+        )
+        for out_key, col_name in [
+            ("sat_family", "saturation_family"),
+            ("alpha_hat", "alpha_hat"),
+            ("budget_increment", "budget_increment"),
+            # Optimization statistics shown in the descriptive block.
+            ("budget_mode", "budget_mode"),
+            ("budget_K", "K"),
+            ("budget_K_out", "K_out"),
+            ("unspent_budget", "unspent_budget"),
+            ("marginal_roi_at_optimum", "marginal_roi_at_optimum"),
+            ("n_units_excluded_negative_roi", "n_units_excluded_negative_roi"),
+            ("n_units_capped_by_roi", "n_units_capped_by_roi"),
+            # Allocation scope, support cap and the stated premise.
+            ("reallocate_within", "reallocate_within"),
+            ("cap_quantile", "cap_quantile"),
+            ("assumptions", "assumptions"),
+            ("n_units_at_support_cap", "n_units_at_support_cap"),
+        ]:
+          if col_name in df.columns and pd.notnull(row.get(col_name)):
+            value = row[col_name]
+            if out_key in string_keys:
+              metrics[key][out_key] = str(value)
+            else:
+              metrics[key][out_key] = float(value)
       return metrics
     except (
         OSError,
@@ -440,6 +681,108 @@ def generate_html_report(output_dir: str) -> str | None:
 
   opt_metrics_json = json.dumps(trt_opt_metrics)
 
+  def extract_yearly_summary(csv_path):
+    """Reads ``optimization_yearly_summary.csv`` into the matrix payload.
+
+    Args:
+      csv_path: Path to ``optimization_yearly_summary.csv``.
+
+    Returns:
+      ``{dim_key: {"years": [...], "before": [{spend, kpi, roi}, ...],
+      "after": [...]}}`` with ``dim_key`` in ``total`` / ``geo:<geo>`` /
+      ``item:<item>`` (the values of the dimension selector). An empty dict
+      when the file is missing, unreadable or lacks the required columns.
+    """
+    if not os.path.exists(csv_path):
+      return {}
+    try:
+      df = pd.read_csv(csv_path)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+      print(f"Error reading {csv_path}: {e}")
+      return {}
+    needed = {"dimension", "level", "year", "spend_before", "spend_after"}
+    if not needed.issubset(df.columns):
+      return {}
+    payload = {}
+    for _, row in df.iterrows():
+      dim = str(row["dimension"])
+      level = str(row["level"])
+      if dim == "total":
+        key = "total"
+      elif dim == "geo":
+        key = f"geo:{level}"
+      elif dim == "item":
+        key = f"item:{level}"
+      else:
+        continue
+      entry = payload.setdefault(key, {"years": [], "before": [], "after": []})
+      entry["years"].append(str(row["year"]))
+      for side in ("before", "after"):
+        entry[side].append({
+            "spend": float(row.get(f"spend_{side}", 0.0) or 0.0),
+            "kpi": float(row.get(f"incremental_kpi_{side}", 0.0) or 0.0),
+            "roi": float(row.get(f"roi_{side}", 0.0) or 0.0),
+        })
+    return payload
+
+  yearly_summary = {}
+  for t, ttype in treatment_types.items():
+    if ttype in ["percentage", "impressions", "price"]:
+      yearly_summary[t] = extract_yearly_summary(
+          os.path.join(
+              output_dir,
+              "step4_consolidated_results",
+              "roi_output",
+              t,
+              "007_optimization",
+              "optimization_yearly_summary.csv",
+          )
+      )
+  yearly_summary["main"] = extract_yearly_summary(
+      os.path.join(
+          output_dir,
+          "step4_consolidated_results",
+          "graph",
+          "007_optimization",
+          "optimization_yearly_summary.csv",
+      )
+  )
+  yearly_summary_json = json.dumps(yearly_summary)
+  # Which treatments were fitted with D = fbar(T;
+  # alpha_hat) (selected_family != None) -- the sensitivity tab states that
+  # their bounds are conditional on alpha_hat.  Empty on the family=None path.
+  sens_selected_family_json = json.dumps(
+      metadata.get("saturation_selected_family") or {}
+  )
+
+  # Reported in the header: True = the simple ROI-threshold optimizer, False
+  # = the saturation-aware optimizer.  Older metadata files lack the key.
+  simple_optimization_flag = metadata.get("simple_optimization")
+  simple_optimization_str = (
+      "n/a" if simple_optimization_flag is None else str(
+          bool(simple_optimization_flag)
+      )
+  )
+
+  # 000_saturation tab (saturation runs only).
+  phase0_button = ""
+  if saturation_phase0:
+    phase0_button = (
+        "        <button class=\"tab-button\" onclick=\"openTab(event,"
+        " 'tab_000_saturation')\">000_saturation</button>\n"
+    )
+  # Linear-fallback notice for the optimization descriptive block, keyed
+  # like `optMetricsData` ("main" for spend, the treatment name otherwise).
+  phase4_fallback = {}
+  for t_name, info in phase4_optimization.items():
+    if (info or {}).get("phase4_fallback_to_linear"):
+      ttype = treatment_types.get(t_name)
+      key = (
+          t_name if ttype in ["percentage", "impressions", "price"] else "main"
+      )
+      phase4_fallback[key] = info
+  phase4_fallback_json = json.dumps(phase4_fallback)
+
   html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -460,6 +803,17 @@ def generate_html_report(output_dir: str) -> str | None:
         .data-table {{ border-collapse: collapse; width: 50%; margin-top: 15px; margin-bottom: 15px; }}
         .data-table th, .data-table td {{ text-align: left; padding: 8px; border: 1px solid #c8e6c9; color: #000; }}
         .data-table th {{ background-color: #2e7d32; color: white; }}
+        /* Yearly before / after matrix: exactly the width of the tab; the
+           two label columns are fixed, the year columns share the rest and the
+           renderer picks a font size at which the widest number fits.  Only
+           the label cells may wrap; numbers are never broken. */
+        .yearly-matrix {{ border-collapse: collapse; width: 100%; table-layout: fixed; margin-top: 15px; margin-bottom: 15px; }}
+        .yearly-matrix th, .yearly-matrix td {{ text-align: right; padding: 5px 8px; border: 1px solid #c8e6c9; color: #000; vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .yearly-matrix th {{ background-color: #2e7d32; color: white; text-align: center; }}
+        .yearly-matrix td.row-label {{ font-weight: bold; background-color: #e8f5e9; color: #1b5e20; text-align: left; white-space: normal; }}
+        .yearly-matrix td.metric-label {{ text-align: left; color: #333; background-color: #f9fbf9; white-space: normal; }}
+        .yearly-matrix td.total-col {{ background-color: #f1f8e9; font-weight: bold; }}
+        .yearly-matrix tr.roi-row td {{ border-bottom: 2px solid #2e7d32; }}
         select {{ font-size: 16px; padding: 5px; margin-right: 10px; border: 1px solid #2e7d32; color: #2e7d32; border-radius: 4px; }}
         .chart-img {{ max-width: 100%; height: auto; margin-top: 15px; cursor: zoom-in; border: 1px solid #e8f5e9; border-radius: 4px; transition: transform 0.2s; }}
         .chart-img:hover {{ box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
@@ -490,7 +844,7 @@ def generate_html_report(output_dir: str) -> str | None:
             <strong>Data Period:</strong> {date_col_min} to {date_col_max} <br>
             <strong>Date Col:</strong> {date_col_str} | <strong>Population Col:</strong> {population_col_str} <br>
             <strong>Geo Col:</strong> {geo_col_str} | <strong>Item Col:</strong> {item_col_str} <br>
-            <strong>X Cols List:</strong> {', '.join(str(x) for x in x_cols_list)}
+            {cluster_keys_html}<strong>X Cols List:</strong> {', '.join(str(x) for x in x_cols_list)}
         </div>
         <div class="row-mid">
             <strong>Model Group(s):</strong> {', '.join(map(str, model_groups))} <br>
@@ -499,12 +853,13 @@ def generate_html_report(output_dir: str) -> str | None:
             <strong>CATE Structure:</strong> {', '.join(map(str, cate_structure))} <br>
             <strong>CATE DF:</strong> {', '.join(map(str, cate_df))} <br>
             <strong>CATE Degree:</strong> {', '.join(map(str, cate_degree))} <br>
-            <strong>CATE Intercept:</strong> {', '.join(map(str, cate_intercept))}
+            <strong>CATE Intercept:</strong> {', '.join(map(str, cate_intercept))} <br>
+            <strong>Simple Optimization:</strong> {simple_optimization_str}
         </div>
     </div>
 
     <div class="tab-buttons">
-        <button class="tab-button active" onclick="openTab(event, 'tab_001_total')">001_total</button>
+{phase0_button}        <button class="tab-button active" onclick="openTab(event, 'tab_001_total')">001_total</button>
         <button class="tab-button" onclick="openTab(event, 'tab_002_geo')">002_geo</button>
         <button class="tab-button" onclick="openTab(event, 'tab_003_item')">003_item</button>
         <button class="tab-button" onclick="openTab(event, 'tab_004_cate')">004_cate</button>
@@ -597,6 +952,7 @@ def generate_html_report(output_dir: str) -> str | None:
     <div id="tab_004_cate" class="tab-content">
         <h3>CATE Estimation</h3>
         <img class="chart-img" src="{get_b64('step4_consolidated_results/graph/004_cate/cate_scatter_matrix.png')}" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img class="chart-img" src="{get_b64('step4_consolidated_results/graph/004_cate/cate_response_curves.png')}" onclick="expandImage(this.src)" onerror="this.style.display='none'">
     </div>
 """
 
@@ -637,9 +993,13 @@ def generate_html_report(output_dir: str) -> str | None:
 """
   html += """
         <br>
+        <p id="sens_note_006" class="row-mid" style="display:none;"></p>
         <img id="img_006" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
     </div>
 """
+
+  if saturation_phase0:
+    html += _phase0_tab_html(output_dir, saturation_phase0)
 
   if has_spend:
     html += """
@@ -656,8 +1016,14 @@ def generate_html_report(output_dir: str) -> str | None:
           "<p>Optimization is skipped because 'optimize' is set to False.</p>\n"
       )
     else:
-      if geos or items:
-        html += f"""
+      # Same structure as the roi_output_007_optimization (<treatment>) tab:
+      # selector, descriptive metrics, the spend_vs_est chart (simple
+      # optimizer), the original-vs-optimal treatment chart (saturation
+      # optimizer only), the <outcome> chart (both optimizers: observed vs
+      # projected outcome), the three before / after charts (spend,
+      # incremental effect, ROI) and the yearly matrix.  Every image is hidden
+      # when its file does not exist.
+      html += f"""
         <select id="sel_007_dim" onchange="updateImgOpt007_main()">
             {dim_opts}
         </select>
@@ -665,7 +1031,13 @@ def generate_html_report(output_dir: str) -> str | None:
       html += """
         <br>
         <div id="opt_metrics_007_main"></div>
-        <img id="img_007" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_007_spend_vs_est" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_007_treatment" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_007_outcome" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_007_before_after" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_007_incremental_before_after" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_007_roi_before_after" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <div id="yearly_matrix_007_main"></div>
 """
     html += "    </div>\n"
 
@@ -761,6 +1133,11 @@ def generate_html_report(output_dir: str) -> str | None:
         <br>
         <div id="opt_metrics_{t}_007"></div>
         <img id="img_{t}_007" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_{t}_007_outcome" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_{t}_007_before_after" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_{t}_007_incremental_before_after" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <img id="img_{t}_007_roi_before_after" class="chart-img" src="" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+        <div id="yearly_matrix_{t}_007"></div>
     </div>
 """
 
@@ -778,9 +1155,13 @@ def generate_html_report(output_dir: str) -> str | None:
         const gtMetrics = {gt_metrics_json_str};
         const metadata_geo_col = "{geo_col}";
         const metadata_item_col = "{item_col}";
+        const metadata_outcome_col = "{outcome_col}";
         const isAllOtherTreatment = {str(is_all_other_treatment).lower()};
         const optMetricsData = {opt_metrics_json};
         const optThresholdRoi = "{metadata.get('opt_threshold_roi', 'None')}";
+        const phase4Fallback = {phase4_fallback_json};
+        const yearlySummaryData = {yearly_summary_json};
+        const sensSelectedFamily = {sens_selected_family_json};
 
         function renderMetrics(divId, key) {{
             var div = document.getElementById(divId);
@@ -828,6 +1209,80 @@ def generate_html_report(output_dir: str) -> str | None:
                 html += "<strong>Other Cost Variables:</strong> " + m.other_vars + "<br>";
                 html += "<strong>Total Cost of Other Cost Variables:</strong> " + m.other_cost + "<br>";
                 html += "<strong>Increase Percentage of Total Cost of Other Cost Variables:</strong> " + m.increase_pct + "</p>";
+                // Saturation-only rows, rendered only when the
+                // saturation optimizer supplied them.
+                if (m.sat_family !== undefined) {{
+                    html += "<p><strong>Saturation Family:</strong> " + m.sat_family;
+                    if (m.alpha_hat !== undefined) {{
+                        html += "<br><strong>Estimated alpha (alpha_hat):</strong> " + m.alpha_hat.toPrecision(6);
+                    }}
+                    if (m.budget_increment !== undefined) {{
+                        html += "<br><strong>Budget Increment:</strong> " + m.budget_increment;
+                    }}
+                    // Budget mode and the optimization statistics.
+                    var fmtOpt = function(v) {{ return (v === null || v === undefined) ? "n/a" : Number(v).toLocaleString('en-US', {{maximumFractionDigits: 4}}); }};
+                    if (m.budget_mode !== undefined) {{
+                        html += "<br><strong>Budget mode:</strong> " + m.budget_mode;
+                    }}
+                    if (m.budget_K !== undefined) {{
+                        html += "<br><strong>Budget K:</strong> " + fmtOpt(m.budget_K);
+                    }}
+                    if (m.budget_K_out !== undefined) {{
+                        html += "<br><strong>Allocated total K_out:</strong> " + fmtOpt(m.budget_K_out);
+                    }}
+                    if (m.unspent_budget !== undefined) {{
+                        html += "<br><strong>Unspent budget:</strong> " + fmtOpt(m.unspent_budget);
+                    }}
+                    if (m.marginal_roi_at_optimum !== undefined) {{
+                        html += "<br><strong>Marginal ROI at the optimum (mu*):</strong> " + fmtOpt(m.marginal_roi_at_optimum);
+                    }}
+                    if (m.n_units_excluded_negative_roi !== undefined) {{
+                        html += "<br><strong>Units excluded (negative ROI):</strong> " + m.n_units_excluded_negative_roi;
+                    }}
+                    if (m.n_units_capped_by_roi !== undefined) {{
+                        html += "<br><strong>Units capped by the ROI threshold:</strong> " + m.n_units_capped_by_roi;
+                    }}
+                    if (m.n_units_at_support_cap !== undefined) {{
+                        html += "<br><strong>Units at their support cap T_bar_t:</strong> " + m.n_units_at_support_cap;
+                    }}
+                    if (m.cap_quantile !== undefined) {{
+                        html += "<br><strong>Support cap quantile (cap_quantile):</strong> " + fmtOpt(m.cap_quantile) + " (1 = cell maximum; T_bar_t = max(Q_q(geo x item cell, T&gt;0), actual))";
+                    }}
+                    if (m.reallocate_within !== undefined) {{
+                        html += "<br><strong>Reallocation scope (reallocate_within):</strong> " + m.reallocate_within + (m.reallocate_within === "date" ? " (one KKT problem per date; no cross-day movement)" : " (one KKT problem; spend moves across days, geos and items)");
+                    }}
+                    if (m.assumptions !== undefined) {{
+                        html += "<br><strong>Premise:</strong> " + m.assumptions + " &mdash; the response of a unit (geo x item x date row) depends on that row's spend only; no carryover / adstock is modelled. Interpret the allocation at the geo x item x period level rather than day by day.";
+                    }}
+                    html += "</p>";
+                }}
+                if (m.inc_kpi !== undefined || m.opt_inc_kpi !== undefined) {{
+                    html += "<p>";
+                    if (m.inc_kpi !== undefined) {{
+                        html += "<strong>Incremental KPI in the Period:</strong> " + Math.round(m.inc_kpi).toLocaleString() + "<br>";
+                    }}
+                    if (m.roi !== undefined) {{
+                        html += "<strong>ROI:</strong> " + m.roi.toFixed(4) + "<br>";
+                    }}
+                    if (m.opt_inc_kpi !== undefined) {{
+                        html += "<strong>Optimized Incremental KPI in the Period:</strong> " + Math.round(m.opt_inc_kpi).toLocaleString() + "<br>";
+                    }}
+                    if (m.opt_roi !== undefined) {{
+                        html += "<strong>Optimized ROI:</strong> " + m.opt_roi.toFixed(4) + "<br>";
+                    }}
+                    if (m.inc_kpi !== undefined && m.opt_inc_kpi !== undefined) {{
+                        html += "<strong>Incremental KPI Uplift:</strong> " + Math.round(m.opt_inc_kpi - m.inc_kpi).toLocaleString();
+                    }}
+                    html += "</p>";
+                }}
+            }}
+            // Phase 0 selected linear -> linear fallback.
+            if (phase4Fallback[t]) {{
+                var fb = phase4Fallback[t];
+                var fmt = function(v) {{ return (v === null || v === undefined) ? "n/a" : Number(v).toPrecision(4); }};
+                html += "<p><strong>Saturation Fallback:</strong> " + fb.phase4_fallback_reason;
+                html += "<br><strong>Decision basis:</strong> decision_reason = " + (fb.phase4_fallback_decision_reason || "n/a") + ", d_bar = " + fmt(fb.phase4_fallback_d_bar) + ", se = " + fmt(fb.phase4_fallback_se) + ", k = " + fb.phase4_fallback_linear_test_k;
+                html += "<br><strong>simple_optimization (config, unchanged):</strong> " + fb.simple_optimization_config + "</p>";
             }}
             div.innerHTML = html;
         }}
@@ -845,6 +1300,118 @@ def generate_html_report(output_dir: str) -> str | None:
             }}
         }}
 
+        // Yearly before / after matrix.  Columns: "Before / After", the
+        // metric (Spend, Incremental KPI, ROI), one column per year and the
+        // Total; every numeric cell holds the number only.  The table spans
+        // the tab width (CSS: width 100%, fixed layout) and the font size is
+        // chosen so that the widest number fits its column.
+        var YEARLY_LABEL_COL_PX = 165;   // "Before optimization" column
+        var YEARLY_METRIC_COL_PX = 140;  // "Incremental KPI" column
+        var YEARLY_LABEL_COL_MIN_PX = 80;   // narrowest, labels wrap
+        var YEARLY_METRIC_COL_MIN_PX = 80;
+        var YEARLY_FONT_MAX_PX = 14;
+        var YEARLY_FONT_MIN_PX = 9;
+        var YEARLY_CELL_PAD_PX = 18;  // horizontal padding + border
+        var YEARLY_EM_PER_CHAR = 0.62;  // digits / separators in Arial
+        function renderYearlyMatrix(divId, t, dim) {{
+            var div = document.getElementById(divId);
+            if (!div) return;
+            var data = yearlySummaryData[t] ? yearlySummaryData[t][dim] : null;
+            if (!data || !data.years || !data.years.length) {{
+                div.innerHTML = '';
+                return;
+            }}
+            var fmtInt = function(v) {{ return Math.round(Number(v)).toLocaleString('en-US'); }};
+            var fmtRoi = function(v) {{ return Number(v).toFixed(2); }};
+            var metrics = [
+                ['Spend', function(m) {{ return fmtInt(m.spend); }}, ''],
+                ['Incremental KPI', function(m) {{ return fmtInt(m.kpi); }}, ''],
+                ['ROI', function(m) {{ return fmtRoi(m.roi); }}, ' class="roi-row"']
+            ];
+            var nYears = data.years.length;
+            var maxLen = 6;  // widest rendered number, in characters
+            var html = '<table class="yearly-matrix">';
+            html += '<colgroup><col class="col-label"><col class="col-metric">';
+            for (var c = 0; c < nYears; c++) {{ html += '<col>'; }}
+            html += '</colgroup>';
+            html += '<tr><th></th><th>Metric</th>';
+            for (var i = 0; i < nYears; i++) {{
+                html += '<th>' + data.years[i] + '</th>';
+            }}
+            html += '</tr>';
+            var groups = [['Before optimization', data.before], ['After optimization', data.after]];
+            for (var g = 0; g < groups.length; g++) {{
+                for (var r = 0; r < metrics.length; r++) {{
+                    html += '<tr' + metrics[r][2] + '>';
+                    if (r === 0) {{
+                        html += '<td class="row-label" rowspan="' + metrics.length + '">' + groups[g][0] + '</td>';
+                    }}
+                    html += '<td class="metric-label">' + metrics[r][0] + '</td>';
+                    for (var j = 0; j < nYears; j++) {{
+                        var text = metrics[r][1](groups[g][1][j]);
+                        if (text.length > maxLen) maxLen = text.length;
+                        var cls = data.years[j] === 'Total' ? ' class="total-col"' : '';
+                        html += '<td' + cls + '>' + text + '</td>';
+                    }}
+                    html += '</tr>';
+                }}
+            }}
+            html += '</table>';
+            div.innerHTML = html;
+            var table = div.querySelector('table');
+            table.dataset.maxlen = maxLen;
+            table.dataset.nyears = nYears;
+            fitYearlyMatrix(table);
+        }}
+
+        // Fit a yearly matrix to the width of its container: the year columns
+        // share what the two label columns leave; the font shrinks (14 px
+        // down to 9 px) until the widest number (~0.62 em per character plus
+        // the cell padding) fits one column.  If even 9 px is too wide the
+        // two label columns are narrowed (their text wraps) and, as a last
+        // resort, the matrix scrolls horizontally inside its container, so
+        // the numbers are never cut and nothing spills outside the page.
+        // Re-run when a tab is opened (hidden tabs have no width) and when
+        // the window is resized.
+        function fitYearlyMatrix(table) {{
+            var div = table.parentNode;
+            if (!div || !div.clientWidth) return;
+            var nYears = Number(table.dataset.nyears) || 1;
+            var maxLen = Number(table.dataset.maxlen) || 6;
+            var numberPx = function(fontPx) {{ return maxLen * YEARLY_EM_PER_CHAR * fontPx + YEARLY_CELL_PAD_PX; }};
+            var labelPx = YEARLY_LABEL_COL_PX, metricPx = YEARLY_METRIC_COL_PX;
+            var perCol = (div.clientWidth - labelPx - metricPx) / nYears;
+            var fontPx = Math.floor((perCol - YEARLY_CELL_PAD_PX) / (maxLen * YEARLY_EM_PER_CHAR));
+            fontPx = Math.max(YEARLY_FONT_MIN_PX, Math.min(YEARLY_FONT_MAX_PX, fontPx));
+            var needed = numberPx(fontPx) * nYears;
+            var spare = div.clientWidth - needed;  // what the label columns may use
+            if (spare < labelPx + metricPx) {{
+                var ratio = Math.max(0, spare) / (labelPx + metricPx);
+                labelPx = Math.max(YEARLY_LABEL_COL_MIN_PX, Math.floor(labelPx * ratio));
+                metricPx = Math.max(YEARLY_METRIC_COL_MIN_PX, Math.floor(metricPx * ratio));
+            }}
+            table.style.fontSize = fontPx + 'px';
+            var cols = table.querySelectorAll('col');
+            if (cols.length >= 2) {{
+                cols[0].style.width = labelPx + 'px';
+                cols[1].style.width = metricPx + 'px';
+            }}
+            var minWidth = Math.ceil(needed + labelPx + metricPx);
+            if (minWidth > div.clientWidth) {{
+                table.style.minWidth = minWidth + 'px';
+                div.style.overflowX = 'auto';
+            }} else {{
+                table.style.minWidth = '';
+                div.style.overflowX = '';
+            }}
+        }}
+
+        function fitYearlyMatricesIn(root) {{
+            var tables = (root || document).querySelectorAll('table.yearly-matrix');
+            for (var i = 0; i < tables.length; i++) {{ fitYearlyMatrix(tables[i]); }}
+        }}
+        window.addEventListener('resize', function() {{ fitYearlyMatricesIn(document); }});
+
         function openTab(evt, tabName) {{
             var i, tabcontent, tablinks;
             tabcontent = document.getElementsByClassName("tab-content");
@@ -855,8 +1422,11 @@ def generate_html_report(output_dir: str) -> str | None:
             for (i = 0; i < tablinks.length; i++) {{
                 tablinks[i].className = tablinks[i].className.replace(" active", "");
             }}
-            document.getElementById(tabName).style.display = "block";
+            var opened = document.getElementById(tabName);
+            opened.style.display = "block";
             evt.currentTarget.className += " active";
+            // The matrix was rendered while the tab was hidden (width 0).
+            fitYearlyMatricesIn(opened);
         }}
 
         function updateImg001() {{
@@ -899,18 +1469,34 @@ def generate_html_report(output_dir: str) -> str | None:
 
         function updateImgOpt007_main() {{
             var sel = document.getElementById('sel_007_dim');
-            if (!sel) return;
-            var dim = sel.value;
-            var path = 'step4_consolidated_results/graph/007_optimization/';
-            if (dim === 'total') {{
-                path += 'total_timeseries_spend_vs_est.png';
-            }} else if (dim.startsWith('geo:')) {{
-                path += 'geo_' + dim.substring(4) + '_timeseries_spend_vs_est.png';
+            var dim = sel ? sel.value : 'total';
+            var base = 'step4_consolidated_results/graph/007_optimization/';
+            var prefix = 'total';
+            if (dim.startsWith('geo:')) {{
+                prefix = 'geo_' + dim.substring(4);
             }} else if (dim.startsWith('item:')) {{
-                path += 'item_' + dim.substring(5) + '_timeseries_spend_vs_est.png';
+                prefix = 'item_' + dim.substring(5);
             }}
-            updateImgByPath('img_007', path);
+            // Simple optimizer (simple_optimization=True / linear fallback).
+            updateImgByPath('img_007_spend_vs_est',
+                base + prefix + '_timeseries_spend_vs_est.png');
+            // Saturation-aware optimizer only (hidden when the file does not
+            // exist).
+            updateImgByPath('img_007_treatment',
+                base + prefix + '_original_vs_optimal_treatment.png');
+            // Both optimizers: the <outcome> chart (observed vs projected
+            // outcome), the before / after charts (spend, incremental effect,
+            // ROI) and the yearly matrix.
+            updateImgByPath('img_007_outcome',
+                base + prefix + '_' + metadata_outcome_col + '.png');
+            updateImgByPath('img_007_before_after',
+                base + prefix + '_timeseries_spend_before_after.png');
+            updateImgByPath('img_007_incremental_before_after',
+                base + prefix + '_timeseries_incremental_effect_before_after.png');
+            updateImgByPath('img_007_roi_before_after',
+                base + prefix + '_timeseries_roi_before_after.png');
             renderOptMetrics('opt_metrics_007_main', 'main', dim);
+            renderYearlyMatrix('yearly_matrix_007_main', 'main', dim);
         }}
 
         function updateImgSens006() {{
@@ -928,6 +1514,18 @@ def generate_html_report(output_dir: str) -> str | None:
 
             var path = 'step4_consolidated_results/graph/006_sensitivity/' + trt + '_' + scopeStr + '_sensitivity_contour.png';
             updateImgByPath('img_006', path);
+            // With D = fbar(T; alpha_hat) the OVB bounds
+            // are conditional on the selected shape.
+            var note = document.getElementById('sens_note_006');
+            if (note) {{
+                var fam = sensSelectedFamily[trt];
+                if (fam) {{
+                    note.innerHTML = '<strong>Note:</strong> the treatment variable of the PLR is f&#772;(T; &alpha;&#770;) (family: ' + fam + '); the bounds are conditional on the selected shape &alpha;&#770; (see Diag2 in the 000_saturation tab for shape uncertainty).';
+                    note.style.display = 'block';
+                }} else {{
+                    note.style.display = 'none';
+                }}
+            }}
         }}
 
         function updateImgOpt001(t) {{
@@ -1000,16 +1598,20 @@ def generate_html_report(output_dir: str) -> str | None:
 
         function updateImgOpt007(t) {{
             var dim = document.getElementById('sel_' + t + '_007_dim').value;
-            var path = 'step4_consolidated_results/roi_output/' + t + '/007_optimization/';
-            if (dim === 'total') {{
-                path += 'total_timeseries_spend_vs_est.png';
-            }} else if (dim.startsWith('geo:')) {{
-                path += 'geo_' + dim.substring(4) + '_timeseries_spend_vs_est.png';
+            var base = 'step4_consolidated_results/roi_output/' + t + '/007_optimization/';
+            var prefix = 'total';
+            if (dim.startsWith('geo:')) {{
+                prefix = 'geo_' + dim.substring(4);
             }} else if (dim.startsWith('item:')) {{
-                path += 'item_' + dim.substring(5) + '_timeseries_spend_vs_est.png';
+                prefix = 'item_' + dim.substring(5);
             }}
-            updateImgByPath('img_' + t + '_007', path);
+            updateImgByPath('img_' + t + '_007', base + prefix + '_timeseries_spend_vs_est.png');
+            updateImgByPath('img_' + t + '_007_outcome', base + prefix + '_' + metadata_outcome_col + '.png');
+            updateImgByPath('img_' + t + '_007_before_after', base + prefix + '_timeseries_spend_before_after.png');
+            updateImgByPath('img_' + t + '_007_incremental_before_after', base + prefix + '_timeseries_incremental_effect_before_after.png');
+            updateImgByPath('img_' + t + '_007_roi_before_after', base + prefix + '_timeseries_roi_before_after.png');
             renderOptMetrics('opt_metrics_' + t + '_007', t, dim);
+            renderYearlyMatrix('yearly_matrix_' + t + '_007', t, dim);
         }}
 
         function expandImage(src) {{
@@ -1024,7 +1626,7 @@ def generate_html_report(output_dir: str) -> str | None:
             if(document.getElementById('sel_002_fmt')) updateImg002();
             if(document.getElementById('sel_003_fmt')) updateImg003();
             if(document.getElementById('sel_006_trt')) {{ var sel = document.getElementById('sel_006_trt'); sel.onchange(); }}
-            if(document.getElementById('sel_007_geo')) {{ updateImgOpt007_main(); }}
+            if(document.getElementById('opt_metrics_007_main')) {{ updateImgOpt007_main(); }}
 
             var selects = document.getElementsByTagName('select');
             for(var i=0; i<selects.length; i++) {{
@@ -1040,7 +1642,10 @@ def generate_html_report(output_dir: str) -> str | None:
 </html>
 """
 
-  out_path = os.path.join(output_dir, "report.html")
+  out_path = os.path.join(
+      output_dir,
+      _report_filename(treatment_cols, outcome_col, saturation_family),
+  )
   with open(out_path, "w") as f:
     f.write(html)
 
