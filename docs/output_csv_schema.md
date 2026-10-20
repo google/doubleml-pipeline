@@ -80,6 +80,11 @@ The pipeline executes in 4 sequential phases, plus optional optimization and sen
             └── <prefix>_<outcome>.png           # Both optimizers: red original KPI vs blue projected total KPI under the optimized spend
 ```
 
+Next to these folders, `<output_dir>` also contains `metadata.json` (run
+configuration), `report.html` (when `generate_html=True`) and
+`agents/causal_ml_insight_agent/`, a runnable ADK agent that analyzes these
+outputs (when `generate_agent=True`).
+
 ---
 
 ## 2. Overview of Output CSV Files

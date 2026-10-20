@@ -162,6 +162,24 @@ FILE_INDEX: Tuple[Tuple[str, str, str], ...] = (
      "bar chart of n_cells_sel / n_cells_inf per key level"),
 )
 
+METADATA_FILE = "metadata.json"
+PHASE4_DIR = "step4_consolidated_results"
+FULL_DF_FILE = f"{PHASE4_DIR}/consolidated_1a_full_df.csv"
+REPETITIONS_FILE = f"{PHASE4_DIR}/consolidated_3a_detail.csv"
+SUMMARY_FILE = f"{PHASE4_DIR}/consolidated_3b_summary.csv"
+GEO_SUMMARY_FILE = f"{PHASE4_DIR}/consolidated_3b_summary_geo.csv"
+ITEM_SUMMARY_FILE = f"{PHASE4_DIR}/consolidated_3b_summary_item.csv"
+CATE_COEF_FILE = f"{PHASE4_DIR}/graph/004_cate/cate_coef_dict_pooling.csv"
+PRIOR_FILE = f"{PHASE4_DIR}/graph/005_prior/prior_parameters.csv"
+SENSITIVITY_FILE = (
+    f"{PHASE4_DIR}/graph/006_sensitivity/sensitivity_metrics.csv"
+)
+OPTIMIZATION_FILE = (
+    f"{PHASE4_DIR}/graph/007_optimization/optimization_metrics.csv"
+)
+
+DIMENSIONS = ("geo", "item")
+
 
 def save_step1_outputs(
     df_1a: pd.DataFrame,

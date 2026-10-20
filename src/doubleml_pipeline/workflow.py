@@ -36,6 +36,7 @@ import pandas as pd
 from scipy import stats
 
 from . import optimization
+from .agent import generator as agent_generator
 
 # Phase 0 lives in `evaluation.alpha_selection`; it is aliased so that the
 # `alpha_selection` constructor argument (the config key) cannot shadow it.
@@ -560,6 +561,7 @@ class CausalWorkflowOrchestrator:
       # Phase 1 / Phase 3 run then fits that fixed theta*.  "per_fold": the
       # previous behaviour (a FLAML search inside every fold).
       hparam_policy: str = DEFAULT_HPARAM_POLICY,
+      generate_agent: bool = True,
   ):
     """Initializes the central parameters for orchestration tasks."""
     # Validate parameters
@@ -871,6 +873,7 @@ class CausalWorkflowOrchestrator:
         peak_months if peak_months is not None else [3, 7, 11, 12]
     )
     self.generate_html = generate_html
+    self.generate_agent = generate_agent
 
   def _validate_treatments(self, df: pd.DataFrame) -> None:
     """Validates treatment types, percentage bounds, and required columns.
@@ -3952,9 +3955,7 @@ class CausalWorkflowOrchestrator:
       if "model_obj" in best_model_data:
         # Inject contextual metadata for the historical results.
         best_model_data["model_obj"].pipeline_metadata_ = {
-            "historical_results_path": (
-                "step4_consolidated_results/consolidated_1a_full_df.csv"
-            ),
+            "historical_results_path": io.FULL_DF_FILE,
             "message": (
                 "Valid, pooled historical estimation results are stored in the "
                 "above CSV. This pickle acts as an inference engine for future "
@@ -3989,7 +3990,7 @@ class CausalWorkflowOrchestrator:
     )
     self._warn_treatment_lag_covariates()
 
-    phase4_dir = os.path.join(self.output_dir, "step4_consolidated_results")
+    phase4_dir = os.path.join(self.output_dir, io.PHASE4_DIR)
     graph_dir = os.path.join(phase4_dir, "graph")
     total_graph_dir = os.path.join(graph_dir, "001_total")
     geo_graph_dir = os.path.join(graph_dir, "002_geo")
@@ -4010,11 +4011,11 @@ class CausalWorkflowOrchestrator:
       os.makedirs(dir_path, exist_ok=True)
 
     pd.concat(all_3a_details, ignore_index=True).to_csv(
-        os.path.join(phase4_dir, "consolidated_3a_detail.csv"), index=False
+        os.path.join(self.output_dir, io.REPETITIONS_FILE), index=False
     )
     if all_cate_pool_rows:
       pd.DataFrame(all_cate_pool_rows).to_csv(
-          os.path.join(cate_graph_dir, "cate_coef_dict_pooling.csv"),
+          os.path.join(self.output_dir, io.CATE_COEF_FILE),
           index=False,
       )
     df_3b_concat = pd.concat(all_best_models_3b, ignore_index=True)
@@ -4076,7 +4077,7 @@ class CausalWorkflowOrchestrator:
     pd.concat(
         [df_3b_concat, pd.DataFrame([total_row_dict])], ignore_index=True
     ).to_csv(
-        os.path.join(phase4_dir, "consolidated_3b_summary.csv"), index=False
+        os.path.join(self.output_dir, io.SUMMARY_FILE), index=False
     )
 
     # The consolidated frame carries the RAW treatment values.
@@ -4509,7 +4510,7 @@ class CausalWorkflowOrchestrator:
               )
 
     df_1a_consolidated.to_csv(
-        os.path.join(phase4_dir, "consolidated_1a_full_df.csv"), index=False
+        os.path.join(self.output_dir, io.FULL_DF_FILE), index=False
     )
 
     geo_summary_df = self._generate_dim_summary(
@@ -4517,7 +4518,7 @@ class CausalWorkflowOrchestrator:
     )
     if geo_summary_df is not None:
       geo_summary_df.to_csv(
-          os.path.join(phase4_dir, "consolidated_3b_summary_geo.csv"),
+          os.path.join(self.output_dir, io.GEO_SUMMARY_FILE),
           index=False,
       )
 
@@ -4526,7 +4527,7 @@ class CausalWorkflowOrchestrator:
     )
     if item_summary_df is not None:
       item_summary_df.to_csv(
-          os.path.join(phase4_dir, "consolidated_3b_summary_item.csv"),
+          os.path.join(self.output_dir, io.ITEM_SUMMARY_FILE),
           index=False,
       )
 
@@ -4755,7 +4756,7 @@ class CausalWorkflowOrchestrator:
 
     if prior_records:
       pd.DataFrame(prior_records).to_csv(
-          os.path.join(prior_graph_dir, "prior_parameters.csv"), index=False
+          os.path.join(self.output_dir, io.PRIOR_FILE), index=False
       )
 
     if self.run_sensitivity:
@@ -4960,10 +4961,10 @@ class CausalWorkflowOrchestrator:
 
       if sensitivity_records:
         pd.DataFrame(sensitivity_records).to_csv(
-            os.path.join(sens_graph_dir, "sensitivity_metrics.csv"), index=False
+            os.path.join(self.output_dir, io.SENSITIVITY_FILE), index=False
         )
 
-    metadata_path = os.path.join(self.output_dir, "metadata.json")
+    metadata_path = os.path.join(self.output_dir, io.METADATA_FILE)
 
     date_col_min = (
         str(df_1a_consolidated[self.date_col].min())
@@ -5020,6 +5021,9 @@ class CausalWorkflowOrchestrator:
         "treatment_spend_totals": treatment_spend_totals,
         "geo_col": self.geo_col,
         "item_col": self.item_col,
+        "geo_name_col": self.geo_name_col,
+        "item_name_col": self.item_name_col,
+        "covariates_for_cate_list": self.covariates_for_cate_list,
         "geos": geos,
         "items": items,
         "months": months,
@@ -5086,12 +5090,36 @@ class CausalWorkflowOrchestrator:
     with open(metadata_path, "w") as f:
       json.dump(metadata, f, indent=4)
 
+    report_path = None
     if self.generate_html:
       print("  ├─ Generating HTML Report...", flush=True)
-      html_extraction.generate_html_report(self.output_dir)
+      report_path = html_extraction.generate_html_report(self.output_dir)
+      if report_path:
+        print(f"  │    Saved: {report_path}", flush=True)
+
+    agent_dir = None
+    if self.generate_agent:
+      print("  ├─ Generating ADK Analysis Agent...", flush=True)
+      agent_dir = agent_generator.generate_agent(self.output_dir)
+      print(f"  │    Saved: {agent_dir}", flush=True)
 
     print(
         "======================================================================\n★★★"
-        " Full Pipeline Execution Finished ★★★\n",
+        " Full Pipeline Execution Finished ★★★",
         flush=True,
     )
+    if report_path or agent_dir:
+      print("\nNext Steps (Interactive AI Analysis):", flush=True)
+      if report_path:
+        print(
+            f"  - Browser (no server needed): Open {report_path} ->"
+            " 'AI Assistant (Gemini)' tab and enter a Gemini API key.",
+            flush=True,
+        )
+      if agent_dir:
+        print(
+            "  - ADK Web UI (optional):      To launch later, run"
+            f" `adk web {agent_dir.parent}` in your terminal.",
+            flush=True,
+        )
+    print("", flush=True)

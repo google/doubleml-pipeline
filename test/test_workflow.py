@@ -102,6 +102,8 @@ class WorkflowTest(unittest.TestCase):
     self.assertEqual(self.orchestrator.d_cols, ["T1"])
     self.assertEqual(self.orchestrator.x_cols_list, [["X1", "X2"]])
     self.assertEqual(self.orchestrator.output_dir, self.test_dir)
+    self.assertTrue(self.orchestrator.generate_html)
+    self.assertTrue(self.orchestrator.generate_agent)
 
   def test_validate_treatments_spend(self):
     """Tests treatment validation for spend types."""

@@ -12,7 +12,7 @@ This document outlines the core public classes and functions available in the
 The central manager for orchestrating the DoubleML execution pipeline, handling
 parallelization, model selection, and visual reporting.
 
-#### `__init__(self, y_col, d_cols, x_cols_list, ml_models_y, ml_models_t, n_folds_list, output_dir, n_jobs=-1, covariates_for_cate_list=None, cate_structure_list=None, time_budget=15, date_col=None, geo_col=None, item_col=None, geo_name_col=None, item_name_col=None, run_sensitivity=False, sensitivity_scope=None, ground_truth_existence=False, ground_truth_effect_column=None, treatment_types=None, treatment_spend_cols=None, sales_col=None, peak_months=None, optimize=False, simple_optimization=None, opt_periods=None, opt_threshold_roi=1.0, opt_other_cost_variables=None, generate_html=True, opt_geos=None, opt_items=None, saturation_config=None, hparam_policy="global")`
+#### `__init__(self, y_col, d_cols, x_cols_list, ml_models_y, ml_models_t, n_folds_list, output_dir, n_jobs=-1, covariates_for_cate_list=None, cate_structure_list=None, time_budget=15, date_col=None, geo_col=None, item_col=None, geo_name_col=None, item_name_col=None, run_sensitivity=False, sensitivity_scope=None, ground_truth_existence=False, ground_truth_effect_column=None, treatment_types=None, treatment_spend_cols=None, sales_col=None, peak_months=None, optimize=False, simple_optimization=None, opt_periods=None, opt_threshold_roi=1.0, opt_other_cost_variables=None, generate_html=True, opt_geos=None, opt_items=None, saturation_config=None, hparam_policy="global", generate_agent=True)`
 
 **Parameters:**
 
@@ -129,6 +129,10 @@ parallelization, model selection, and visual reporting.
     estimation (cross-fitting, CATE, repetitions, median aggregation), the
     combined-error ranking or any Phase 4 output; it has no effect on Phase 0.
     Example: `"per_fold"`.
+-   `generate_agent` *(bool, default=True)*: Whether to write an ADK agent that
+    analyzes the results to `<output_dir>/agents/causal_ml_insight_agent/`
+    (see [`doubleml_pipeline.agent`](#module-doubleml_pipelineagent)).
+    Run it with `adk web <output_dir>/agents`. Example: `False`.
 
 > [!NOTE]
 > Compute-time behaviour that applies under **both** policies: Phase 1
@@ -637,6 +641,81 @@ recomputed from the treatment column Phase 1 receives differs from the Phase 0
 `T_ref` by a relative error of at least `alpha_selection.t_ref_tolerance`
 (a unit or hand-over bug). `diag6_t_ref_consistency.csv` is written before
 the error is raised.
+
+--------------------------------------------------------------------------------
+
+## Module: `doubleml_pipeline.agent`
+
+Turns the results of a pipeline run into a local
+[ADK](https://google.github.io/adk-docs/) agent that explains the causal
+estimates. The agent's tools only read the pipeline outputs and do all the
+arithmetic deterministically, so the LLM interprets DoubleML estimates instead
+of computing effects itself.
+
+### Function: `generate_agent`
+
+#### `generate_agent(results_dirs, *, output_dir=None, run_names=None, skills_dir=None, model='gemini-3.8-flash', agent_name='causal_ml_insight_agent')`
+
+Writes `__init__.py`, `agent.py`, `.env.example` and a copy of the skills to
+`<output_dir>/agents/<agent_name>/`. Regenerating overwrites these files. The
+agent refers to the runs by relative paths, so they can be moved together.
+
+**Parameters:**
+
+-   `results_dirs` *(str | os.PathLike | Sequence)*: `output_dir` of a
+    completed pipeline run, or several of them (for example one per channel).
+    Treatment names must be unique across runs. Example:
+    `['results/Spend_TV', 'results/Spend_Flyer']`.
+-   `output_dir` *(Optional[str | os.PathLike], default=None)*: Where to write
+    the agent. Defaults to the run's directory; required for several runs.
+-   `run_names` *(Optional[Sequence[str]], default=None)*: Run names used in
+    answers. Default to the directory names.
+-   `skills_dir` *(Optional[str | os.PathLike], default=None)*: Directory whose
+    subdirectories with a `SKILL.md` are copied into the agent. Defaults to the
+    skills bundled in `doubleml_pipeline/skills/`. Example: `'./my_skills'`.
+-   `model` *(str, default='gemini-3.8-flash')*: Gemini model of the agent.
+-   `agent_name` *(str, default='causal_ml_insight_agent')*: Agent and folder
+    name; must be a valid Python identifier.
+
+**Returns:**
+
+-   `pathlib.Path`: The generated agent directory.
+
+### Class: `CausalResultsReader`
+
+#### `__init__(self, results)`
+
+Reads `metadata.json` from `results` (the `output_dir` of a completed run, or a
+mapping from run name to `output_dir` for several runs) and exposes the analysis
+tools below. Tools route each treatment to the run that estimated it, and report
+runs side by side without adding effects across them. Each tool returns a JSON-serializable dict
+whose `status` is `"ok"`, `"unavailable"` (the run did not produce the required
+output) or `"invalid_argument"`.
+
+#### `tools(self)`
+
+Returns the bound tool methods, ready to pass to `google.adk.Agent(tools=...)`.
+
+#### `snapshot(self)`
+
+Returns a JSON-serializable dict of precomputed outputs across all
+`CausalResultsReader` tools (used by `generate_html_report` to power the
+serverless in-browser `AI Assistant (Gemini)` tab in `report.html`).
+
+Tool                                                                  | Answers
+--------------------------------------------------------------------- | -------
+`get_analysis_overview()`                                             | Outcome, treatments, period, segment dimensions and available analyses.
+`get_treatment_effects()`                                             | Incremental KPI with 95% interval, effect per unit, ROI on spend and outcome share per treatment.
+`get_segment_effects(dimension, treatment=None, sort_by='incremental_kpi', top_n=10)` | Highest and lowest geo or item segments, the spread of the effect, and whether segment-specific effects are modeled at all.
+`get_effect_trend(treatment=None, granularity='month')`               | Effect per week, month, quarter, year or calendar month, and the variables through which it can change.
+`get_effect_heterogeneity(treatment=None, bins=4)`                    | Per-unit effect (CATE) across quantile bins of each CATE covariate, with a significance test.
+`get_robustness_checks(treatment=None)`                               | Stability across repetitions and sensitivity to unobserved confounding.
+
+### Constant: `INSTRUCTION`
+
+The default system instruction of the generated agent. It limits the agent to
+questions that the causal estimates can answer and requires every number to
+come from a tool result.
 
 --------------------------------------------------------------------------------
 

@@ -82,7 +82,7 @@ scientifically robust and highly automated.
 
 Before running the pipeline, ensure you have:
 
-*   **Python 3.9** or later.
+*   **Python 3.10** or later.
 
 ### Installation
 
@@ -724,6 +724,53 @@ hyphen, and the `_<family>` segment is omitted when saturation is not enabled
 (`tv_spend_sales.html`).
 
 --------------------------------------------------------------------------------
+
+### Analyzing Results with AI (Browser Chat or ADK Agent)
+
+There are two ways to explore the causal estimates with Gemini:
+
+1. **Directly in `report.html` (no server required)**: Open
+   `<output_dir>/report.html` in your browser, select the
+   **`✨ AI Assistant (Gemini)`** tab, and enter a Gemini API Key to chat
+   interactively with the precomputed `CausalResultsReader` outputs and bundled
+   `retail-analytics` skill.
+2. **Local [ADK](https://google.github.io/adk-docs/) Agent (`generate_agent=True`)**:
+   By default, the pipeline also writes a runnable ADK agent to
+   `<output_dir>/agents/causal_ml_insight_agent/`. The agent answers business
+   questions such as "Which promotion pays back, where, and when?" from the
+   pipeline outputs. Its tools read the results and do the arithmetic
+   deterministically, so the LLM interprets the DoubleML estimates instead of
+   computing causal effects itself. The domain knowledge comes from
+   [Agent Skills](https://agentskills.io) bundled in
+   [`skills/`](skills/), starting with `retail-analytics`. Coding agents can use
+   these skills directly too.
+
+```bash
+cp causal_results/agents/causal_ml_insight_agent/.env.example \
+   causal_results/agents/causal_ml_insight_agent/.env  # Set your project.
+adk web causal_results/agents
+```
+
+To regenerate the agent with your own skills or model, or to add one to the
+results of an earlier run:
+
+```python
+from doubleml_pipeline.agent import generate_agent
+
+generate_agent("./causal_results", skills_dir="./my_skills")
+```
+
+If you run one orchestrator per channel, one agent can cover all of the runs.
+It compares the channels side by side but never adds their effects up, since
+each run is estimated separately:
+
+```python
+generate_agent(
+    ["results/Spend_TV", "results/Spend_Digital", "results/Spend_Flyer"],
+    output_dir="results",
+)
+# adk web results/agents
+```
 
 ### User Guide
 
