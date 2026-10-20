@@ -1198,6 +1198,7 @@ def generate_html_report(output_dir: str) -> str | None:
                 <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Which treatment is most effective, how reliable is its estimate, and what is its break-even gross margin?')">Treatment Comparison</button>
                 <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('When and where do treatment effects vary? Summarize the modeled CATE heterogeneity and note any dimensions that are not modeled.')">CATE Heterogeneity (When &amp; Where)</button>
                 <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('How robust are the causal estimates across repetitions and to unobserved confounders?')">Robustness &amp; Sensitivity</button>
+                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('If the pipeline optimized the budget, where and when does the optimized allocation move spend, what does the model expect from it, and what assumptions and warnings apply?')">Budget Optimization</button>
             </div>
             <div id="ai_chat_thread" class="ai-chat-thread"></div>
             <div id="ai_chat_status" class="ai-status"></div>

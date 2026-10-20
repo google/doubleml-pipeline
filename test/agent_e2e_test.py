@@ -74,6 +74,8 @@ class AgentEndToEndTest(unittest.TestCase):
         sensitivity_scope=["total", "geo"],
         treatment_spend_cols={"spend": "spend"},
         sales_col="sales",
+        optimize=True,
+        opt_threshold_roi=1.0,
         generate_html=False,
     )
     orchestrator.run_full_pipeline(
@@ -110,6 +112,7 @@ class AgentEndToEndTest(unittest.TestCase):
         "get_effect_trend": {"granularity": "quarter"},
         "get_effect_heterogeneity": {},
         "get_robustness_checks": {},
+        "get_budget_optimization": {"dimension": "geo"},
     }
     self.assertCountEqual(calls, results_reader.TOOL_NAMES)
     for name, kwargs in calls.items():
@@ -117,6 +120,14 @@ class AgentEndToEndTest(unittest.TestCase):
         result = getattr(self.reader, name)(**kwargs)
         self.assertEqual(result["status"], "ok", result)
         json.dumps(result, allow_nan=False)
+
+  def test_budget_optimization_matches_pipeline_outputs(self):
+    for dimension in ("total", "date", "geo", "item"):
+      with self.subTest(dimension=dimension):
+        result = self.reader.get_budget_optimization(dimension=dimension)
+        self.assertEqual(result["status"], "ok", result)
+        self.assertEqual(result["settings"]["optimizer"], "simple")
+        self.assertTrue(result["matches_pipeline_totals"])
 
   def test_recovers_positive_effect(self):
     (run,) = self.reader.get_treatment_effects()["runs"]

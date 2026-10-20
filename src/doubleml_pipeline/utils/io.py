@@ -177,6 +177,12 @@ SENSITIVITY_FILE = (
 OPTIMIZATION_FILE = (
     f"{PHASE4_DIR}/graph/007_optimization/optimization_metrics.csv"
 )
+# Where non-spend treatments (percentage, impressions, price) write the same
+# file; format with `treatment=<d_col>`.
+ROI_OUTPUT_OPTIMIZATION_FILE = (
+    f"{PHASE4_DIR}/roi_output/{{treatment}}/007_optimization/"
+    "optimization_metrics.csv"
+)
 
 DIMENSIONS = ("geo", "item")
 

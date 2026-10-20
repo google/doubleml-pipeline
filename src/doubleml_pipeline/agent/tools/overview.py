@@ -18,6 +18,7 @@ import re
 from typing import Dict
 
 from . import base
+from . import budget_optimization
 
 _LAG_PATTERN = re.compile(r"_l\d+$")
 
@@ -31,6 +32,9 @@ def _analysis_availability(run: base.RunData) -> Dict[str, bool]:
       "get_robustness_checks": (
           run.has_file(base.REPETITIONS_FILE)
           or run.has_file(base.SENSITIVITY_FILE)
+      ),
+      "get_budget_optimization": budget_optimization.optimization_available(
+          run
       ),
   }
 

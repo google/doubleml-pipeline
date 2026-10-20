@@ -24,6 +24,7 @@ import pathlib
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from .tools import base
+from .tools import budget_optimization
 from .tools import effect_heterogeneity
 from .tools import effect_trend
 from .tools import overview
@@ -41,6 +42,7 @@ TOOL_NAMES = (
     "get_effect_trend",
     "get_effect_heterogeneity",
     "get_robustness_checks",
+    "get_budget_optimization",
 )
 
 
@@ -132,7 +134,30 @@ class CausalResultsReader:
             t: self.get_effect_heterogeneity(treatment=t) for t in treatments
         },
         "get_robustness_checks": self.get_robustness_checks(),
+        "get_budget_optimization": self._optimization_snapshot(treatments),
     }
+
+  def _optimization_snapshot(self, treatments: List[str]) -> Dict[str, Any]:
+    """Returns get_budget_optimization per treatment and dimension."""
+    snapshot: Dict[str, Any] = {}
+    for treatment in treatments:
+      total = self.get_budget_optimization(treatment=treatment)
+      if total["status"] != "ok":
+        snapshot[treatment] = {"total": total}
+        continue
+      snapshot[treatment] = {
+          "total": total,
+          "date": self.get_budget_optimization(
+              treatment=treatment, dimension="date"
+          ),
+          **{
+              dim: self.get_budget_optimization(
+                  treatment=treatment, dimension=dim
+              )
+              for dim in base.DIMENSIONS
+          },
+      }
+    return snapshot
 
   get_analysis_overview = overview.get_analysis_overview
   get_treatment_effects = treatment_effects.get_treatment_effects
@@ -140,6 +165,7 @@ class CausalResultsReader:
   get_effect_trend = effect_trend.get_effect_trend
   get_effect_heterogeneity = effect_heterogeneity.get_effect_heterogeneity
   get_robustness_checks = robustness_checks.get_robustness_checks
+  get_budget_optimization = budget_optimization.get_budget_optimization
 
   def _route(self, treatment: Optional[str]) -> Tuple[str, base.RunData]:
     """Returns the run name and `RunData` that estimated `treatment`."""

@@ -710,6 +710,7 @@ Tool                                                                  | Answers
 `get_effect_trend(treatment=None, granularity='month')`               | Effect per week, month, quarter, year or calendar month, and the variables through which it can change.
 `get_effect_heterogeneity(treatment=None, bins=4)`                    | Per-unit effect (CATE) across quantile bins of each CATE covariate, with a significance test.
 `get_robustness_checks(treatment=None)`                               | Stability across repetitions and sensitivity to unobserved confounding.
+`get_budget_optimization(treatment=None, dimension='total', granularity='month', top_n=10)` | Optimized allocation of a run made with `optimize=True` (simple or saturation-aware): spend, incremental KPI and ROI before and after, overall, per date period or for the geos / items with the largest spend changes, with assumptions and warnings.
 
 ### Constant: `INSTRUCTION`
 

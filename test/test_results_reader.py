@@ -137,7 +137,9 @@ class CausalResultsReaderTest(unittest.TestCase):
 
   def test_tools_are_bound_methods_with_docstrings(self):
     tools = self.reader.tools()
-    self.assertEqual(len(tools), 6)
+    self.assertEqual(
+        [tool.__name__ for tool in tools], list(results_reader.TOOL_NAMES)
+    )
     for tool in tools:
       self.assertTrue(tool.__name__.startswith("get_"))
       self.assertTrue(tool.__doc__)
@@ -149,6 +151,11 @@ class CausalResultsReaderTest(unittest.TestCase):
           result = tool("geo")
         elif tool.__name__ == "get_effect_heterogeneity":
           result = tool("T1")
+        elif tool.__name__ == "get_budget_optimization":
+          # This two-treatment run was not optimized.
+          result = tool("T1")
+          self.assertEqual(result["status"], "unavailable")
+          continue
         else:
           result = tool()
         self.assertEqual(result["status"], "ok")
@@ -173,7 +180,9 @@ class CausalResultsReaderTest(unittest.TestCase):
         overview["segment_dimensions"]["geo"],
         {"column": "store", "segments": 2},
     )
-    self.assertEqual(overview["unavailable_analyses"], [])
+    self.assertEqual(
+        overview["unavailable_analyses"], ["get_budget_optimization"]
+    )
 
   def test_treatment_effects(self):
     """Per-treatment and combined totals match the hand-computed fixture."""
@@ -494,6 +503,223 @@ class MultiRunReaderTest(unittest.TestCase):
     snap = self.reader.snapshot()
     self.assertCountEqual(snap.keys(), results_reader.TOOL_NAMES)
     json.dumps(snap, allow_nan=False)
+
+
+def _write_optimized_run(
+    root: pathlib.Path, saturation: bool = False, **metadata_overrides
+) -> None:
+  """Writes a single-treatment run with Phase 4 optimization outputs.
+
+  Rows (date, store, sku, spend, KPI): 2024-01 A X 10 30 (ROI 3), 2024-01 B X
+  10 5 (ROI 0.5), 2024-02 A Y 20 -4 (ROI -0.2), 2024-02 B Y 0 0, and a row in
+  2023-12 outside the optimization period.
+  """
+  phase4 = root / _PHASE4
+  opt_dir = phase4 / "graph" / "007_optimization"
+  opt_dir.mkdir(parents=True, exist_ok=True)
+  full = pd.DataFrame({
+      "date": [
+          "2023-12-15", "2024-01-15", "2024-01-15", "2024-02-15", "2024-02-15"
+      ],
+      "store": ["A", "A", "B", "A", "B"],
+      "store_name": ["Alpha", "Alpha", "Beta", "Alpha", "Beta"],
+      "sku": ["X", "X", "X", "Y", "Y"],
+      "sales": [100.0, 100.0, 200.0, 300.0, 400.0],
+      "spend": [50.0, 10.0, 10.0, 20.0, 0.0],
+      "estimated_incremental_KPI_spend": [5.0, 30.0, 5.0, -4.0, 0.0],
+  })
+  col = "estimated_incremental_KPI_spend"
+  full[f"{col}_2.5%"] = full[col] - 1.0
+  full[f"{col}_97.5%"] = full[col] + 1.0
+  if saturation:
+    # Moves spend from the low-ROI rows to store A in January.
+    full["optimized_spend_spend"] = [50.0, 34.0, 6.0, 0.0, 0.0]
+    full["optimized_incremental_KPI_spend"] = [5.0, 62.0, 3.0, 0.0, 0.0]
+    spend_after, kpi_after = 40.0, 65.0
+  else:
+    spend_after, kpi_after = 10.0, 30.0
+  full.to_csv(phase4 / "consolidated_1a_full_df.csv", index=False)
+
+  metrics = {
+      "treatment": ["spend", "spend"],
+      "target_geo": ["all", "all"],
+      "target_item": ["all", "X"],
+      "periods_start_date": ["2024-01-01"] * 2,
+      "periods_end_date": ["2024-02-29"] * 2,
+      "threshold_roi": [1.0, 1.0],
+      "total_cost_of_treatment_in_periods": [40.0, 20.0],
+      "optimized_total_cost_of_treatment_in_periods": [spend_after, 0.0],
+  }
+  if saturation:
+    metrics.update({
+        "saturation_family": ["tanh"] * 2,
+        "budget_increment": [0.0] * 2,
+        "budget_mode": ["fixed"] * 2,
+        "budget_reallocate": [True] * 2,
+        "cap_quantile": [1.0] * 2,
+        "reallocate_within": ["all"] * 2,
+        "K": [40.0, 20.0],
+        "K_out": [40.0, 36.0],
+        "unspent_budget": [0.0, -16.0],
+        "marginal_roi_at_optimum": [1.2] * 2,
+        "optimized_incremental_KPI_spend": [kpi_after, 63.0],
+    })
+  pd.DataFrame(metrics).to_csv(opt_dir / "optimization_metrics.csv", index=False)
+
+  metadata = {
+      "treatment_cols": ["spend"],
+      "outcome_col": "sales",
+      "date_col": "date",
+      "x_cols_list": [["demand"]],
+      "covariates_for_cate_list": [[]],
+      "treatment_types": {"spend": "spend"},
+      "treatment_spend_cols": {"spend": "spend"},
+      "geo_col": "store",
+      "item_col": "sku",
+      "geo_name_col": "store_name",
+      "geos": ["A", "B"],
+      "items": ["X", "Y"],
+      "optimization": True,
+      "opt_threshold_roi": 1.0,
+      "simple_optimization": not saturation,
+      **metadata_overrides,
+  }
+  if saturation:
+    metadata["saturation_family"] = "tanh"
+    metadata["phase4_optimization"] = {
+        "spend": {"phase4_optimization": "saturation"}
+    }
+  (root / "metadata.json").write_text(json.dumps(metadata))
+
+
+class BudgetOptimizationTest(unittest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.root = pathlib.Path(tempfile.mkdtemp())
+    self.addCleanup(shutil.rmtree, self.root)
+
+  def _reader(self, **kwargs) -> results_reader.CausalResultsReader:
+    _write_optimized_run(self.root, **kwargs)
+    return results_reader.CausalResultsReader(self.root)
+
+  def test_simple_optimizer_is_reproduced_from_row_roi(self):
+    result = self._reader().get_budget_optimization()
+
+    self.assertEqual(result["status"], "ok", result)
+    self.assertEqual(result["settings"]["optimizer"], "simple")
+    overall = result["overall"]
+    # The 2023-12 row is outside the period; only the ROI 3 row keeps spend.
+    self.assertEqual(overall["allocation_units"], 4)
+    self.assertEqual(overall["spend_before"], 40.0)
+    self.assertEqual(overall["spend_after"], 10.0)
+    self.assertEqual(overall["incremental_kpi_before"], 31.0)
+    self.assertEqual(overall["incremental_kpi_after"], 30.0)
+    self.assertEqual(overall["units_spend_cut_to_zero"], 2)
+    self.assertEqual(overall["units_with_actual_spend"], 3)
+    self.assertTrue(result["matches_pipeline_totals"])
+    self.assertIn("not reallocated", " ".join(result["assumptions"]))
+    self.assertNotIn("optimizer_statistics", result)
+    json.dumps(result, allow_nan=False)
+
+  def test_saturation_optimizer_reads_optimized_columns(self):
+    result = self._reader(saturation=True).get_budget_optimization()
+
+    self.assertEqual(result["settings"]["optimizer"], "saturation")
+    self.assertEqual(result["settings"]["saturation_family"], "tanh")
+    overall = result["overall"]
+    self.assertEqual(overall["spend_after"], 40.0)
+    self.assertEqual(overall["incremental_kpi_after"], 65.0)
+    self.assertEqual(overall["units_spend_increased"], 1)
+    self.assertEqual(overall["units_spend_reduced"], 1)
+    self.assertEqual(overall["units_spend_cut_to_zero"], 1)
+    self.assertTrue(result["matches_pipeline_totals"])
+    self.assertEqual(result["optimizer_statistics"]["K"], 40.0)
+    # 65 is more than twice the 31 estimated for the actual spend.
+    self.assertIn("2.1 times", " ".join(result["warnings"]))
+
+  def test_by_geo_ranks_spend_changes_with_names(self):
+    result = self._reader(saturation=True).get_budget_optimization(
+        dimension="geo"
+    )
+
+    self.assertEqual(result["segments"], 2)
+    (increase,) = result["largest_increases"]
+    (decrease,) = result["largest_decreases"]
+    self.assertEqual(
+        (increase["segment"], increase["name"], increase["spend_change"]),
+        ("A", "Alpha", 4.0),
+    )
+    self.assertEqual(
+        (decrease["segment"], decrease["name"], decrease["spend_change"]),
+        ("B", "Beta", -4.0),
+    )
+
+  def test_by_date_returns_one_row_per_period(self):
+    result = self._reader().get_budget_optimization(
+        dimension="date", granularity="month"
+    )
+
+    self.assertEqual(
+        [
+            (p["period"], p["spend_before"], p["spend_after"])
+            for p in result["periods"]
+        ],
+        [("2024-01", 20.0, 10.0), ("2024-02", 20.0, 0.0)],
+    )
+
+  def test_by_item(self):
+    result = self._reader().get_budget_optimization(dimension="item")
+
+    self.assertEqual(
+        [(d["segment"], d["spend_change"]) for d in result["largest_decreases"]],
+        [("Y", -20.0), ("X", -10.0)],
+    )
+
+  def test_mismatch_with_pipeline_totals_is_flagged(self):
+    _write_optimized_run(self.root)
+    path = (
+        self.root / _PHASE4 / "graph/007_optimization/optimization_metrics.csv"
+    )
+    metrics = pd.read_csv(path)
+    metrics["optimized_total_cost_of_treatment_in_periods"] = 99.0
+    metrics.to_csv(path, index=False)
+
+    result = results_reader.CausalResultsReader(
+        self.root
+    ).get_budget_optimization()
+
+    self.assertFalse(result["matches_pipeline_totals"])
+    self.assertIn("differ", " ".join(result["warnings"]))
+
+  def test_unavailable_without_optimize(self):
+    result = self._reader(optimization=False).get_budget_optimization()
+
+    self.assertEqual(result["status"], "unavailable")
+    self.assertIn("optimize=True", result["reason"])
+
+  def test_overview_and_snapshot(self):
+    reader = self._reader(saturation=True)
+
+    (overview,) = reader.get_analysis_overview()["runs"]
+    snap = reader.snapshot()["get_budget_optimization"]["spend"]
+
+    self.assertIn("get_budget_optimization", overview["available_analyses"])
+    self.assertCountEqual(snap, ["total", "date", "geo", "item"])
+    self.assertEqual(snap["geo"]["status"], "ok")
+
+  def test_invalid_arguments(self):
+    reader = self._reader()
+    for kwargs in (
+        {"dimension": "store"},
+        {"dimension": "date", "granularity": "day"},
+        {"top_n": 0},
+    ):
+      with self.subTest(**kwargs):
+        self.assertEqual(
+            reader.get_budget_optimization(**kwargs)["status"],
+            "invalid_argument",
+        )
 
 
 if __name__ == "__main__":

@@ -212,10 +212,10 @@ def build_browser_system_instruction(
   parts.append(
       "Browser Report Mode\n"
       "- In this HTML report, all deterministic outputs from the"
-      " CausalResultsReader tools (get_analysis_overview,"
-      " get_treatment_effects, get_segment_effects, get_effect_trend,"
-      " get_effect_heterogeneity, and get_robustness_checks) are already"
-      " precomputed and provided in the causalAnalysisSnapshot JSON block.\n"
+      " CausalResultsReader tools ("
+      + ", ".join(results_reader.TOOL_NAMES)
+      + ") are already precomputed and provided in the"
+      " causalAnalysisSnapshot JSON block.\n"
       "- Respond in English by default unless the user writes in another"
       " language."
   )

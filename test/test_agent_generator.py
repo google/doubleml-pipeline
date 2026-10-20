@@ -22,6 +22,7 @@ import tempfile
 import unittest
 
 from doubleml_pipeline.agent import generator
+from doubleml_pipeline.agent import results_reader
 from google.adk import agents
 from google.adk.tools import function_tool
 from google.adk.tools import skill_toolset
@@ -70,7 +71,7 @@ class GenerateAgentTest(unittest.TestCase):
     self.assertEqual(root_agent.name, "my_agent")
     self.assertEqual(root_agent.model, "gemini-test")
     *reader_tools, skills = root_agent.tools
-    self.assertEqual(len(reader_tools), 6)
+    self.assertEqual(len(reader_tools), len(results_reader.TOOL_NAMES))
     self.assertIsInstance(skills, skill_toolset.SkillToolset)
     for tool in reader_tools:
       with self.subTest(tool=tool.__name__):

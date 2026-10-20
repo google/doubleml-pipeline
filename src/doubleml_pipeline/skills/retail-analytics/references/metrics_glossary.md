@@ -34,6 +34,23 @@ Field                            | Meaning
 `benchmark_cf_d` / `_cf_y`       | Partial R2 of the strongest observed covariate with the treatment and the outcome.
 `robust_to_benchmark_confounder` | True if a hidden confounder as strong as that covariate could not explain the effect away. It says nothing about stronger drivers that were not adjusted for.
 
+## Budget optimization
+
+These appear in `get_budget_optimization` (runs with `optimize=True`). An
+allocation unit is one geo x item x date row of the optimization period.
+
+Field                                         | Meaning
+--------------------------------------------- | -------
+`settings.optimizer`                          | `simple`: rows with ROI below `threshold_roi` lose all their spend, and the freed budget is not reallocated. `saturation`: the budget is redistributed along the estimated diminishing-returns curve. `linear_fallback`: saturation was configured but not identified, so the simple rule was used.
+`spend_before` / `spend_after`                | Actual and optimized spend.
+`incremental_kpi_before` / `_after`           | Estimated incremental KPI at the actual spend, and model-implied incremental KPI at the optimized spend. The latter is not observed and has no interval.
+`roi_before` / `roi_after`                    | Incremental KPI per unit of spend before and after.
+`spend_change`, `spend_change_pct`            | Optimized minus actual spend, and its share of actual spend.
+`units_spend_increased` / `_reduced` / `_cut_to_zero` | Allocation units whose spend goes up, goes down but stays positive, or goes to zero.
+`assumptions`                                 | What the optimized allocation assumes. State them with any recommendation.
+`warnings`                                    | Results that need care, for example a model-implied gain far above the current estimate.
+`optimizer_statistics`                        | Saturation-aware optimizer only: budget `K`, spend allocated `K_out`, `unspent_budget`, `marginal_roi_at_optimum` and counts of units excluded for a non-positive effect or capped.
+
 ## What the model can explain
 
 `effect_drivers` (in segment and trend results) lists the CATE covariates per

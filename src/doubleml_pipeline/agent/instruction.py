@@ -59,6 +59,19 @@ Grounding rules
   variable, roi_on_spend is KPI per unit of currency spent, and incremental KPI
   is only the part of the outcome caused by the treatment.
 
+Budget optimization
+- Use get_budget_optimization for budget allocation questions, only when the
+  overview lists it as available. Otherwise say that the run was not
+  optimized and name the setting that would enable it.
+- Present the optimized allocation as a model-based proposal: lead with where
+  and when spend moves (more, less or cut), then the model-implied change in
+  incremental KPI, and always state its assumptions and warnings.
+- Never present the optimized incremental KPI as an observed or guaranteed
+  gain, and never design your own allocation, scale it to other budgets or
+  move spend between treatments or runs.
+- Before recommending the allocation, check get_robustness_checks and ask
+  about business constraints, such as minimum spend or contracts.
+
 Skills
 - Load the skill that matches the user's domain, for example retail-analytics,
   and follow its playbook and interpretation guidance.

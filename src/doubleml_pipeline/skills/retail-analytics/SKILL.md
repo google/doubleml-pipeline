@@ -39,6 +39,10 @@ Work through the steps that the question needs, in this order.
     (for example demand level, holidays or price) change the per-unit effect.
 6.  **Can we trust it?** Call `get_robustness_checks` before recommending any
     action.
+7.  **How should the budget move?** When the overview lists
+    `get_budget_optimization` as available, call it with `dimension="geo"`,
+    `"item"` or `"date"` (and `granularity`) for the allocation the pipeline
+    optimized. Use it only for budget questions.
 
 ## Retail interpretation rules
 
@@ -80,13 +84,21 @@ Work through the steps that the question needs, in this order.
     in peak seasons. The estimates are only as good as the confounders adjusted
     for (`adjusted_for` in the overview), so mention any obvious omission such
     as competitor activity or concurrent promotions.
+-   **The optimized allocation is a model-based proposal.** It re-plans past
+    spend with the fitted model. Lead with the direction (which stores,
+    products or periods get more, less or no spend), give the optimized
+    incremental KPI only as a model-implied figure, and state its
+    `assumptions` and `warnings`. Units cut to zero are often where the model
+    estimates a zero or negative effect, so check that those estimates are
+    backed by enough treated observations before recommending a cut.
 -   **Stay in the observed range.** Do not extrapolate effects to spend levels,
     discount depths or seasons that the data never covered.
 
 ## Turning insights into actions
 
 -   **Reallocate:** shift spend from segments or periods with low ROI to those
-    with high, stable ROI.
+    with high, stable ROI. When the run was optimized, base the proposal on the
+    optimized allocation instead of your own split.
 -   **Promotion calendar:** concentrate promotions in the months or demand
     conditions where the per-unit effect is highest.
 -   **Assortment and targeting:** focus on stores or items with strong, robust
