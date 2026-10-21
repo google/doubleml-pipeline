@@ -16,6 +16,7 @@
 
 import contextlib
 import copy
+import difflib
 import glob
 import itertools
 import json
@@ -37,7 +38,6 @@ from scipy import stats
 
 from . import optimization
 from .agent import generator as agent_generator
-
 # Phase 0 lives in `evaluation.alpha_selection`; it is aliased so that the
 # `alpha_selection` constructor argument (the config key) cannot shadow it.
 from .evaluation import alpha_selection as phase0
@@ -874,6 +874,89 @@ class CausalWorkflowOrchestrator:
     )
     self.generate_html = generate_html
     self.generate_agent = generate_agent
+
+  def _validate_columns(self, df: pd.DataFrame) -> None:
+    """Checks that every user-specified column exists in ``df``.
+
+    Runs once at the start of ``run_full_pipeline`` so that a misspelled
+    column name fails immediately with ONE message naming every offending
+    parameter.  Without this check the typo would surface late as a raw
+    ``KeyError`` inside a worker (``y_col`` / ``d_cols`` / ``x_cols_list`` /
+    ``covariates_for_cate_list``) or, worse, be silently dropped by a
+    downstream ``if col in df.columns`` guard (``date_col`` / ``geo_col`` /
+    ``item_col`` / ...), changing the cluster DML keys, the charts and the
+    summaries without any notice.
+
+    Optional parameters are only checked when they were set;
+    ``ground_truth_effect_column`` only when ``ground_truth_existence`` is
+    True.  ``treatment_spend_cols`` is left to ``_validate_treatments``,
+    which already reports it.
+
+    Args:
+      df: The input DataFrame of ``run_full_pipeline``.
+
+    Raises:
+      ValueError: If any specified column is not in ``df.columns``.
+    """
+    # Order is preserved (dict.fromkeys de-duplicates without sorting).
+    required: Dict[str, List[Any]] = {
+        "y_col": [self.y_col],
+        "d_cols": list(dict.fromkeys(self.d_cols)),
+        "x_cols_list": list(
+            dict.fromkeys(itertools.chain.from_iterable(self.x_cols_list))
+        ),
+        "covariates_for_cate_list": list(
+            dict.fromkeys(
+                itertools.chain.from_iterable(self.covariates_for_cate_list)
+            )
+        ),
+    }
+    for name in (
+        "date_col",
+        "geo_col",
+        "item_col",
+        "geo_name_col",
+        "item_name_col",
+        "sales_col",
+    ):
+      value = getattr(self, name)
+      if value:
+        required[name] = [value]
+    if self.opt_other_cost_variables:
+      required["opt_other_cost_variables"] = list(
+          dict.fromkeys(self.opt_other_cost_variables)
+      )
+    if self.ground_truth_existence:
+      required["ground_truth_effect_column"] = list(
+          dict.fromkeys(self.ground_truth_effect_column)
+      )
+
+    available = [str(c) for c in df.columns]
+    problems: List[str] = []
+    for param, cols in required.items():
+      missing = [c for c in cols if c not in df.columns]
+      if not missing:
+        continue
+      described = []
+      for col in missing:
+        hint = difflib.get_close_matches(str(col), available, n=1)
+        described.append(
+            f"'{col}'" + (f" (did you mean '{hint[0]}'?)" if hint else "")
+        )
+      problems.append(f"{param}: {', '.join(described)}")
+    if not problems:
+      return
+
+    max_listed = 50
+    shown = ", ".join(repr(c) for c in available[:max_listed])
+    if len(available) > max_listed:
+      shown += f", ... ({len(available) - max_listed} more)"
+    raise ValueError(
+        "The following user-specified column(s) were not found in the input"
+        " DataFrame:\n  - "
+        + "\n  - ".join(problems)
+        + f"\nAvailable columns ({len(available)}): [{shown}]"
+    )
 
   def _validate_treatments(self, df: pd.DataFrame) -> None:
     """Validates treatment types, percentage bounds, and required columns.
@@ -3357,6 +3440,7 @@ class CausalWorkflowOrchestrator:
           " `df = df.reset_index(drop=True)` (or set a unique index) before"
           " run_full_pipeline."
       )
+    self._validate_columns(df)
     self._validate_treatments(df)
     actual_cores = os.cpu_count() if self.n_jobs == -1 else self.n_jobs
     print(

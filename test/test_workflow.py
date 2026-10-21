@@ -140,6 +140,113 @@ class WorkflowTest(unittest.TestCase):
     with self.assertRaisesRegex(ValueError, "valid 'sales_col'"):
       self.orchestrator._validate_treatments(self.df)
 
+  def test_validate_columns_passes_when_all_present(self):
+    """All required columns present and optional ones unset: no error."""
+    self.orchestrator._validate_columns(self.df)
+
+  def test_validate_columns_missing_y_col(self):
+    """A missing outcome column is reported under y_col."""
+    self.orchestrator.y_col = "Y_typo"
+    with self.assertRaisesRegex(ValueError, r"y_col: 'Y_typo'"):
+      self.orchestrator._validate_columns(self.df)
+
+  def test_validate_columns_missing_d_col(self):
+    """A missing treatment column is reported under d_cols."""
+    self.orchestrator.d_cols = ["T1", "T_typo"]
+    with self.assertRaisesRegex(ValueError, r"d_cols: 'T_typo'"):
+      self.orchestrator._validate_columns(self.df)
+
+  def test_validate_columns_reports_every_missing_column_at_once(self):
+    """Typos across several parameters surface in ONE message."""
+    self.orchestrator.x_cols_list = [["X1", "X_bad"]]
+    self.orchestrator.covariates_for_cate_list = [["C_bad"]]
+    self.orchestrator.geo_col = "geo_bad"
+    with self.assertRaises(ValueError) as ctx:
+      self.orchestrator._validate_columns(self.df)
+    message = str(ctx.exception)
+    self.assertIn("x_cols_list: 'X_bad'", message)
+    self.assertIn("covariates_for_cate_list: 'C_bad'", message)
+    self.assertIn("geo_col: 'geo_bad'", message)
+    # Present columns are not reported as missing.
+    reported = message.split("\nAvailable columns")[0]
+    self.assertNotIn("'X1'", reported)
+    self.assertNotIn("y_col", reported)
+    self.assertNotIn("d_cols", reported)
+    # The available columns are listed to help the user.
+    self.assertIn("Available columns (7)", message)
+
+  def test_validate_columns_did_you_mean_hint(self):
+    """A near miss (here a case difference) gets a did-you-mean hint."""
+    self.orchestrator.geo_col = "Geo"
+    with self.assertRaisesRegex(
+        ValueError, r"geo_col: 'Geo' \(did you mean 'geo'\?\)"
+    ):
+      self.orchestrator._validate_columns(self.df)
+
+  def test_validate_columns_optional_params_unset_are_skipped(self):
+    """Unset optional columns are not required to exist."""
+    optional = (
+        "date_col",
+        "geo_col",
+        "item_col",
+        "geo_name_col",
+        "item_name_col",
+        "sales_col",
+    )
+    for name in optional:
+      self.assertIsNone(getattr(self.orchestrator, name))
+    self.orchestrator._validate_columns(self.df)
+
+  def test_validate_columns_optional_param_set_but_missing_raises(self):
+    """An optional column that IS set must exist: no silent fallback."""
+    optional = (
+        "date_col",
+        "geo_col",
+        "item_col",
+        "geo_name_col",
+        "item_name_col",
+        "sales_col",
+    )
+    for name in optional:
+      with self.subTest(name=name):
+        setattr(self.orchestrator, name, "nope")
+        with self.assertRaisesRegex(ValueError, rf"{name}: 'nope'"):
+          self.orchestrator._validate_columns(self.df)
+        setattr(self.orchestrator, name, None)
+
+  def test_validate_columns_ground_truth_only_when_enabled(self):
+    """ground_truth_effect_column is checked only if ground_truth_existence."""
+    self.orchestrator.ground_truth_effect_column = ["gt_missing"]
+    self.orchestrator.ground_truth_existence = False
+    self.orchestrator._validate_columns(self.df)  # Not required: no error.
+    self.orchestrator.ground_truth_existence = True
+    with self.assertRaisesRegex(
+        ValueError, r"ground_truth_effect_column: 'gt_missing'"
+    ):
+      self.orchestrator._validate_columns(self.df)
+
+  def test_validate_columns_opt_other_cost_variables(self):
+    """Cost variables that do not exist are reported, present ones are not."""
+    self.orchestrator.opt_other_cost_variables = ["sales", "cost_typo"]
+    with self.assertRaises(ValueError) as ctx:
+      self.orchestrator._validate_columns(self.df)
+    message = str(ctx.exception)
+    self.assertIn("opt_other_cost_variables: 'cost_typo'", message)
+    self.assertNotIn("'sales'", message.split("\nAvailable columns")[0])
+
+  def test_run_full_pipeline_stops_on_missing_column_before_any_work(self):
+    """run_full_pipeline raises before Phase 0, the scaler fit or any output."""
+    self.orchestrator.x_cols_list = [["X1", "X_bad"]]
+    scaler = scalers.CausalDataScaler(standardize_cols=["X1", "X2"])
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+      with self.assertRaisesRegex(ValueError, r"x_cols_list: 'X_bad'"):
+        self.orchestrator.run_full_pipeline(df=self.df, scaler=scaler)
+    self.assertNotIn("Starting DML Pipeline", buffer.getvalue())
+    self.assertNotIn("Phase 0", buffer.getvalue())
+    # The scaler was never fitted.
+    self.assertEqual(scaler.standard_params_, {})
+
   def test_format_cate_equation(self):
     """Tests formatting of CATE equation from coefficients."""
     coef_dict = {
@@ -465,6 +572,7 @@ class SaturationConfigTest(unittest.TestCase):
     self.assertIn("tanh", saturation.SUPPORTED_FAMILIES)
 
   def test_new_config_keys_are_accepted(self):
+    """All new saturation and alpha_selection config keys pass validation."""
     orch = self._orch({
         "saturation": {
             "family": "tanh",
@@ -633,7 +741,9 @@ class OptimizationSettingsTest(unittest.TestCase):
         saturation_config={"saturation": {"family": "tanh"}},
         **self._kwargs(x_cols_list=[["X1", "T1_l1", "T1_l2", "T1_lag"]]),
     )
-    self.assertEqual(orch.treatment_lag_covariates(), {"T1": ["T1_l1", "T1_l2"]})
+    self.assertEqual(
+        orch.treatment_lag_covariates(), {"T1": ["T1_l1", "T1_l2"]}
+    )
     with warnings.catch_warnings(record=True) as caught:
       warnings.simplefilter("always")
       orch._warn_treatment_lag_covariates()  # pylint: disable=protected-access
@@ -833,6 +943,7 @@ class WorkersThreadsTest(unittest.TestCase):
       self.assertEqual(workflow.resolve_n_cores(-2), 9)
 
   def test_orchestrator_parallel_plan_uses_n_jobs(self):
+    """The orchestrator's (workers, threads) plan is derived from n_jobs."""
     orch = workflow.CausalWorkflowOrchestrator(
         y_col="Y",
         d_cols=["T"],
@@ -860,6 +971,7 @@ class ParallelSectionTest(unittest.TestCase):
         self.assertEqual(backend.inner_max_num_threads, 2)
 
   def test_env_var_selects_the_fork_backend_and_caps_threads(self):
+    """The backend env var selects multiprocessing and caps OMP/MKL threads."""
     env = {workflow.PARALLEL_BACKEND_ENV: "multiprocessing",
            "OMP_NUM_THREADS": "7"}
     with mock.patch.dict(workflow.os.environ, env, clear=False):
@@ -1072,11 +1184,15 @@ ITEM_PATTERNS = {
         r"( \(.+\))?, L_bar\(alpha_hat\) = \S+$"
     ),
     "7_diag2": re.compile(
-        rf"^  │   {_TAG} Diag2( WARNING| INFO)?: 1-SE flatness (fired|not fired),"
-        r" .+ (>|<=) .+ \(A_1SE: \d+ of \d+ grid points\)$"
+        rf"^  │   {_TAG} Diag2( WARNING| INFO)?: 1-SE flatness"
+        r" (fired|not fired), .+ (>|<=) .+ \(A_1SE: \d+ of \d+ grid points\)$"
     ),
-    "7_diag3": re.compile(rf"^  │   {_TAG} Diag3: r_T = sd\(T~\)/sd\(T/T_ref\) = .+$"),
-    "7_diag4": re.compile(rf"^  │   {_TAG} Diag4: shape quantiles at alpha_hat: .+$"),
+    "7_diag3": re.compile(
+        rf"^  │   {_TAG} Diag3: r_T = sd\(T~\)/sd\(T/T_ref\) = .+$"
+    ),
+    "7_diag4": re.compile(
+        rf"^  │   {_TAG} Diag4: shape quantiles at alpha_hat: .+$"
+    ),
     "7_diag5": re.compile(
         rf"^  │   {_TAG} Diag5: saturation level at T_ref kappa\(alpha_hat\) ="
         r" f\(T_ref; alpha_hat\) = .+$"
@@ -1172,7 +1288,8 @@ class ProgressDisplayTest(unittest.TestCase):
     n_treat, s, k, total = (int(v) for v in m.groups())
     self.assertEqual((n_treat, s, k), (1, 2, 2))
     self.assertEqual(total, 1 * 2 * 2 * 2)
-    self.assertEqual(total, sum(r.n_ml_fits for r in orch._alpha_results.values()))  # pylint: disable=protected-access
+    alpha_results = orch._alpha_results  # pylint: disable=protected-access
+    self.assertEqual(total, sum(r.n_ml_fits for r in alpha_results.values()))
     # The console output must not carry internal markers (tag-like
     # prefixes or section pointers), nor internal step logs.
     self.assertNotRegex(log, r"\[v4-[A-Z]")
@@ -1198,7 +1315,8 @@ class ProgressDisplayTest(unittest.TestCase):
     n_treat, s, k, total = (int(v) for v in m.groups())
     self.assertEqual((n_treat, s, k), (2, 3, 2))
     self.assertEqual(total, 2 * 2 * 3 * 2)
-    self.assertEqual(total, sum(r.n_ml_fits for r in orch._alpha_results.values()))  # pylint: disable=protected-access
+    alpha_results = orch._alpha_results  # pylint: disable=protected-access
+    self.assertEqual(total, sum(r.n_ml_fits for r in alpha_results.values()))
 
   def test_progress_line_format(self):
     """Item 2): elapsed, completed / total, ETA -- one line per interval."""

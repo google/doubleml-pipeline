@@ -90,6 +90,31 @@ class FeaturesTest(unittest.TestCase):
     # geo1="B", geo2="Y", date="2020-01-02" -> lag is 3
     self.assertEqual(df_lagged.iloc[3]["value_l1"], 3.0)
 
+  def test_create_lagged_features_missing_unit_col_raises(self):
+    """A misspelled unit_col raises instead of silently dropping the grouping."""
+    df = pd.DataFrame({
+        "date": pd.date_range(start="2020-01-01", periods=4),
+        "value": [1, 2, 3, 4],
+        "geo": ["A", "A", "B", "B"],
+    })
+    with self.assertRaisesRegex(ValueError, r"unit_col \['geo_typo'\]"):
+      features.create_lagged_features(
+          df=df,
+          columns=["value"],
+          periods=1,
+          date_col="date",
+          unit_col="geo_typo",
+      )
+    # Only the absent entries of a list are reported.
+    with self.assertRaisesRegex(ValueError, r"unit_col \['item'\]"):
+      features.create_lagged_features(
+          df=df,
+          columns=["value"],
+          periods=1,
+          date_col="date",
+          unit_col=["geo", "item"],
+      )
+
 
 @pytest.mark.parametrize("freq", ["W-MON", "W-FRI", "W-SAT", "W-SUN"])
 def test_create_lagged_features_weekly(freq):
@@ -178,6 +203,41 @@ class ScalersTest(unittest.TestCase):
     self.assertAlmostEqual(df_restored.iloc[0], 10.0, places=5)
     self.assertAlmostEqual(df_restored.iloc[1], 20.0, places=5)
     self.assertAlmostEqual(df_restored.iloc[2], 30.0, places=5)
+
+  def test_fit_raises_for_missing_scaling_column(self):
+    """A misspelled scaling column raises instead of being silently skipped."""
+    scaler = scalers.CausalDataScaler(standardize_cols=["value1", "value_typo"])
+    df = pd.DataFrame({"value1": [10, 20, 30]})
+    with self.assertRaisesRegex(
+        ValueError, r"standardize_cols: \['value_typo'\]"
+    ):
+      scaler.fit(df)
+    # Nothing was fitted.
+    self.assertEqual(scaler.standard_params_, {})
+
+  def test_fit_reports_every_scaling_list_with_missing_columns(self):
+    """Every list with a missing column is named; complete lists are not."""
+    scaler = scalers.CausalDataScaler(
+        standardize_cols=["value1"],
+        min_max_cols=["a_typo"],
+        median_normalize_cols=["b_typo"],
+    )
+    df = pd.DataFrame({"value1": [10, 20, 30]})
+    with self.assertRaises(ValueError) as ctx:
+      scaler.fit(df)
+    message = str(ctx.exception)
+    self.assertIn("min_max_cols: ['a_typo']", message)
+    self.assertIn("median_normalize_cols: ['b_typo']", message)
+    self.assertNotIn("standardize_cols", message)
+
+  def test_transform_still_tolerates_sub_frames(self):
+    """Only fit is strict: transform keeps working on column sub-frames."""
+    scaler = scalers.CausalDataScaler(standardize_cols=["value1", "value2"])
+    df = pd.DataFrame({"value1": [10, 20, 30], "value2": [1, 2, 3]})
+    scaler.fit(df)
+    df_scaled = scaler.transform(df[["value1"]])
+    self.assertEqual(list(df_scaled.columns), ["value1"])
+    self.assertAlmostEqual(df_scaled["value1"].mean(), 0.0, places=5)
 
 
 if __name__ == "__main__":

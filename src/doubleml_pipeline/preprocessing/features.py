@@ -45,7 +45,8 @@ def create_lagged_features(
       pd.DataFrame: A new dataframe with the lagged columns added.
 
   Raises:
-      ValueError: If date_col is not specified or not in the dataframe.
+      ValueError: If date_col is not specified or not in the dataframe, or if
+        any unit_col entry is not in the dataframe.
       KeyError: If any of the specified columns are not present in the
         dataframe.
   """
@@ -58,6 +59,20 @@ def create_lagged_features(
   for col in columns:
     if col not in df_out.columns:
       raise KeyError(f"Column '{col}' not found in the dataframe.")
+
+  # A misspelled unit column must not silently disable the per-unit grouping
+  # (which would make lags leak across unit boundaries).
+  if unit_col:
+    requested_unit_cols = (
+        [unit_col] if isinstance(unit_col, str) else list(unit_col)
+    )
+    missing_unit_cols = [
+        c for c in requested_unit_cols if c not in df_out.columns
+    ]
+    if missing_unit_cols:
+      raise ValueError(
+          f"unit_col {missing_unit_cols} not found in the dataframe."
+      )
 
   # 1. Sort the dataframe securely
   row_sort_keys = []

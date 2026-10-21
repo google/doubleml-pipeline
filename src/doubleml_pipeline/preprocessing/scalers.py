@@ -67,7 +67,20 @@ class CausalDataScaler:
   # This would lead to scaling being applied multiple times to the same column
 
   def fit(self, x: pd.DataFrame, y: Optional[Any] = None) -> 'CausalDataScaler':
-    """Fits the scaler attributes to the dataset and calculates parameters."""
+    """Fits the scaler attributes to the dataset and calculates parameters.
+
+    Args:
+      x: The dataframe to compute the scaling parameters from.
+      y: Optional target variable. Ignored; accepted for scikit-learn API
+        compatibility.
+
+    Returns:
+      The fitted scaler instance (``self``).
+
+    Raises:
+      ValueError: If ``population_col`` is needed but absent, or if any
+        column named in one of the scaling lists is not in ``x.columns``.
+    """
     del y  # Unused
     df = x
     needs_pop = (
@@ -78,6 +91,27 @@ class CausalDataScaler:
       raise ValueError(
           f"Specified population column '{self.population_col}' not found in"
           ' dataframe.'
+      )
+
+    # Every configured scaling column must exist: a misspelled name would
+    # otherwise be skipped silently and the column left unscaled.
+    missing_by_list = {}
+    for list_name in (
+        'standardize_cols',
+        'population_standardize_cols',
+        'population_median_normalize_cols',
+        'min_max_cols',
+        'median_normalize_cols',
+    ):
+      missing = [c for c in getattr(self, list_name) if c not in df.columns]
+      if missing:
+        missing_by_list[list_name] = missing
+    if missing_by_list:
+      described = '; '.join(
+          f'{name}: {cols}' for name, cols in missing_by_list.items()
+      )
+      raise ValueError(
+          f'Specified scaling column(s) not found in dataframe: {described}.'
       )
 
     if needs_pop:
