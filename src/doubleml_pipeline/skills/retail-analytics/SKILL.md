@@ -101,9 +101,10 @@ Check                 | Read it as
     inferences (the model's estimates under its assumptions). Why they look
     the way they do is a hypothesis. A higher promo ROI on high-media days is
     an inference about when the promo paid back; that media *causes* the
-    higher response is a hypothesis. Label each, and propose the test for the
-    hypothesis (add the driver to the CATE covariates, or a geo holdout with
-    and without media).
+    higher response is a hypothesis. Start every bullet point with its tag
+    (**Fact:**, **Inference:** or **Hypothesis:**), one kind per bullet, and
+    propose the test for the hypothesis (add the driver to the CATE
+    covariates, or a geo holdout with and without media).
 -   **Robustness has limits.** Passing the sensitivity benchmark means only
     that a hidden confounder as strong as the strongest adjusted covariate
     would not overturn the result. It does not cover strong drivers left out of

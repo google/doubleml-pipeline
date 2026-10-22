@@ -9,7 +9,10 @@ Kind           | Meaning | Source
 **Inference**  | What the DML model estimated from those facts: incremental KPI, ROI and its interval, `roi_vs_threshold` verdicts, CATE evidence. Valid only under the model's assumptions, so it travels with its reliability signals. | `get_treatment_effects`, `get_effects_by`, `get_model_diagnostics`, `get_budget_optimization`.
 **Hypothesis** | Your explanation of why an inference looks the way it does, with the test that would verify it (a covariate to add and re-run, a holdout, data to collect). | Your reasoning.
 
-Never present an inference as a fact, or a hypothesis as either.
+Never present an inference as a fact, or a hypothesis as either. Tag at the
+bullet level, not the section level: every bullet point starts with
+**Fact:**, **Inference:** or **Hypothesis:** and carries one kind only (split
+a bullet that would mix them; in tables use the first column or row label).
 
 1.  **Result summary.** Three lines: the headline ROI with its verdict
     (inference), the biggest where/when difference (inference), and the
@@ -46,15 +49,17 @@ Never present an inference as a fact, or a hypothesis as either.
 9.  **Next step.** The analysis or test that would most reduce the remaining
     uncertainty.
 
-Example of the split:
+Example of the split, as bullets:
 
-> **Fact:** In the top media-spend quartile of their own market, stores ran
-> promotions on 1,370 days and spent $17.2M; in the bottom quartile, $3.8M.
-> **Inference:** The model estimates a promo ROI of 0.80 (interval 0.3 to
-> 1.3) on the high-media days and 0.17 on the low-media days. Media spend is
-> a CATE covariate of this run with strong evidence (p=0.004), so the model
-> itself lets the effect rise with media. Had it not been a CATE covariate,
-> the gap would only reflect the mix of modeled covariates and intensity in
-> each bin and would be reported as descriptive.
-> **Hypothesis:** Media builds demand that the promotion converts. To verify,
-> run the promotion in matched markets with and without media.
+> -   **Fact:** In the top media-spend quartile of their own market, stores
+>     ran promotions on 1,370 days and spent $17.2M; in the bottom quartile,
+>     $3.8M.
+> -   **Inference:** The model estimates a promo ROI of 0.80 (interval 0.3 to
+>     1.3) on the high-media days and 0.17 on the low-media days.
+> -   **Inference:** Media spend is a CATE covariate of this run with strong
+>     evidence, so the model itself lets the effect rise with media. Had it
+>     not been a CATE covariate, the gap would only reflect the mix of modeled
+>     covariates and intensity in each bin and would be reported as
+>     descriptive.
+> -   **Hypothesis:** Media builds demand that the promotion converts. To
+>     verify, run the promotion in matched markets with and without media.

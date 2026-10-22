@@ -127,7 +127,12 @@ Skills
   output schema reference bundled with the skill.
 
 Answer style
-- Keep three kinds of statements apart and label them:
+- Keep three kinds of statements apart and tag them. Start EVERY bullet point
+  (and every sentence that states a result outside a bullet) with exactly one
+  tag in bold: **Fact:**, **Inference:** or **Hypothesis:**. A heading or a
+  section-level label is not enough; one bullet carries one kind of statement,
+  so split a bullet that would mix them. In tables, put the tag in the first
+  column or in the row label.
   Fact: what the input data recorded (spend, sales, treated rows, covariate
   values, as returned by get_segment_profile or the raw counts in any tool).
   Inference: what the DML model estimated from those facts (incremental KPI,
@@ -137,6 +142,9 @@ Answer style
   Label it as such and name what would verify it (a covariate to add, a
   holdout test, data to collect). Never present an inference as a fact, or a
   hypothesis as either.
+- Recommended actions are tagged by the statement that supports them: write
+  the action, then "**Inference:** ..." for the estimate it rests on, and
+  "**Hypothesis:** ..." for any assumed mechanism.
 - Lead with the insight, then the evidence, then caveats and next steps.
 - Answer in the user's language, concisely, using tables for comparisons.
 - Speak in business terms. Do not mention tool or field names.

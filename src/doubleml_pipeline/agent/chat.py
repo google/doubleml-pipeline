@@ -27,13 +27,15 @@ so it works in Colab and Jupyter without `adk web`:
 Authentication follows the agent's `.env.example`: Vertex AI when
 `GOOGLE_GENAI_USE_VERTEXAI=TRUE` (with `GOOGLE_CLOUD_PROJECT` and
 `GOOGLE_CLOUD_LOCATION`), otherwise `GOOGLE_API_KEY`. An explicit `api_key`
-argument takes precedence over both.
+argument takes precedence over both; it is a Gemini API key (AI Studio) unless
+`vertexai=True` marks it as a Vertex AI express mode key.
 """
 
 import asyncio
 import dataclasses
 import html
 import os
+import threading
 from typing import Any, List, Mapping, Optional, Sequence, Union
 import uuid
 
@@ -92,6 +94,32 @@ def _format_call(call: ToolCall) -> str:
   return f"`{call.name}({args})`"
 
 
+def _environment_has_credentials() -> bool:
+  """True when the SDK can authenticate from the environment alone."""
+  if os.environ.get("GOOGLE_API_KEY"):
+    return True
+  return os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().upper() in (
+      "TRUE",
+      "1",
+  )
+
+
+def _export_api_key(api_key: str, vertexai: bool) -> None:
+  """Mirrors an explicit key into the environment.
+
+  Older google-adk releases ignore the `client` passed to `Gemini` and build
+  their own `genai.Client` from the environment, which then fails with
+  "No API key was provided". Exporting the key (and the matching backend
+  switch) keeps the explicit key working on every release. An express mode key
+  must not be combined with a project/location, so those are cleared.
+  """
+  os.environ["GOOGLE_API_KEY"] = api_key
+  os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE" if vertexai else "FALSE"
+  if vertexai:
+    os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
+    os.environ.pop("GOOGLE_CLOUD_LOCATION", None)
+
+
 class Chat:
   """A multi-turn conversation with the causal insight agent."""
 
@@ -100,6 +128,7 @@ class Chat:
       results: Results,
       *,
       api_key: Optional[str] = None,
+      vertexai: Optional[bool] = None,
       model: str = generator.DEFAULT_AGENT_MODEL,
       skills_dir: Optional[PathLike] = None,
   ):
@@ -108,9 +137,13 @@ class Chat:
     Args:
       results: The `output_dir` of a completed run, or a mapping from run name
         to `output_dir` for several runs (treatment names must be unique).
-      api_key: Gemini API key. When given it is used regardless of the
-        environment; otherwise the environment decides between Vertex AI and
+      api_key: API key. When given it is used regardless of the environment;
+        otherwise the environment decides between Vertex AI and
         `GOOGLE_API_KEY`, as in the generated agent's `.env.example`.
+      vertexai: Which backend the key belongs to. Defaults to the Gemini API
+        (keys from AI Studio). Pass `True` for a Vertex AI express mode key.
+        A key that is restricted to the other service fails with
+        `403 API_KEY_SERVICE_BLOCKED`; switch this flag in that case.
       model: Gemini model name.
       skills_dir: Directory of skills to load. Defaults to the skills bundled
         with the package.
@@ -120,11 +153,22 @@ class Chat:
         generator.BUNDLED_SKILLS_DIR if skills_dir is None else skills_dir
     )
     if api_key:
-      # The client is pinned to the Gemini API: the SDK would otherwise still
-      # switch to Vertex AI when GOOGLE_GENAI_USE_VERTEXAI is set.
-      client = genai.Client(api_key=api_key, vertexai=False)
+      vertexai = bool(vertexai)
+      _export_api_key(api_key, vertexai)
+      # The client is pinned to the chosen backend: the SDK would otherwise
+      # still switch to Vertex AI when GOOGLE_GENAI_USE_VERTEXAI is set.
+      client = genai.Client(api_key=api_key, vertexai=vertexai)
       llm = google_llm.Gemini(model=model, client=client)
     else:
+      if not _environment_has_credentials():
+        raise ValueError(
+            "No API key was given and the environment has no credentials."
+            " Pass api_key=... (in Colab: add a secret named GOOGLE_API_KEY,"
+            " enable notebook access for it, and read it with"
+            " userdata.get('GOOGLE_API_KEY')), or set"
+            " GOOGLE_GENAI_USE_VERTEXAI=TRUE with GOOGLE_CLOUD_PROJECT and"
+            " GOOGLE_CLOUD_LOCATION for Vertex AI."
+        )
       llm = google_llm.Gemini(model=model)
     self._agent = llm_agent.Agent(
         name=generator.DEFAULT_AGENT_NAME,
@@ -174,6 +218,41 @@ class Chat:
       self._session_id = session.id
     return self._session_id
 
+  def _run_blocking(self, coro):
+    """Runs `coro` to completion from synchronous code such as a widget callback.
+
+    Notebook kernels already run an event loop on the main thread, so the
+    coroutine is driven on that same loop through `nest_asyncio` when it is
+    available (Colab and Jupyter ship it); this keeps the agent's HTTP client
+    on the loop it was created on. Without `nest_asyncio` the coroutine runs
+    on a dedicated background loop instead.
+    """
+    try:
+      loop = asyncio.get_event_loop()
+    except RuntimeError:
+      loop = None
+    if loop is None or loop.is_closed():
+      return asyncio.run(coro)
+    if not loop.is_running():
+      return loop.run_until_complete(coro)
+    try:
+      import nest_asyncio  # pylint: disable=g-import-not-at-top
+    except ImportError:
+      return asyncio.run_coroutine_threadsafe(coro, self._ui_loop()).result()
+    nest_asyncio.apply(loop)
+    return loop.run_until_complete(coro)
+
+  def _ui_loop(self) -> asyncio.AbstractEventLoop:
+    """Event loop on a daemon thread, used when nest_asyncio is unavailable."""
+    loop = getattr(self, "_ui_loop_instance", None)
+    if loop is None or loop.is_closed():
+      loop = asyncio.new_event_loop()
+      threading.Thread(
+          target=loop.run_forever, name="doubleml-chat-ui", daemon=True
+      ).start()
+      self._ui_loop_instance = loop
+    return loop
+
   def ui(self, placeholder: str = "Ask about the causal estimates..."):
     """Returns a chat widget for notebooks (requires ipywidgets).
 
@@ -204,7 +283,7 @@ class Chat:
         display.display(display.Markdown(markdown))
         display.display(display.HTML("<hr>"))
 
-    async def submit() -> None:
+    def on_send(_) -> None:
       question = prompt.value.strip()
       if not question:
         return
@@ -212,15 +291,15 @@ class Chat:
       send.disabled = True
       status.value = "<i>Thinking...</i>"
       try:
-        render(await self.ask(question))
+        # Answered synchronously inside the click handler: in Colab, widget
+        # updates made from another thread, or from a task scheduled on the
+        # kernel loop, are not shown until the next cell runs.
+        render(self._run_blocking(self.ask(question)))
         status.value = ""
       except Exception as e:  # pylint: disable=broad-exception-caught
         status.value = f'<span style="color:#b00">{html.escape(str(e))}</span>'
       finally:
         send.disabled = False
-
-    def on_send(_) -> None:
-      asyncio.ensure_future(submit())
 
     def on_new_chat(_) -> None:
       self.reset()
@@ -240,10 +319,17 @@ class Chat:
 
 
 async def ask(
-    results: Results, question: str, *, api_key: Optional[str] = None, **kwargs
+    results: Results,
+    question: str,
+    *,
+    api_key: Optional[str] = None,
+    vertexai: Optional[bool] = None,
+    **kwargs,
 ) -> Turn:
   """Asks a single question about a run, with no conversation history.
 
-  Equivalent to `await Chat(results, api_key=api_key, **kwargs).ask(question)`.
+  Equivalent to
+  `await Chat(results, api_key=api_key, vertexai=vertexai, **kwargs).ask(question)`.
   """
-  return await Chat(results, api_key=api_key, **kwargs).ask(question)
+  chat = Chat(results, api_key=api_key, vertexai=vertexai, **kwargs)
+  return await chat.ask(question)

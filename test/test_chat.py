@@ -15,6 +15,7 @@
 """Tests for the notebook chat helper."""
 
 import json
+import os
 import pathlib
 import shutil
 import tempfile
@@ -48,6 +49,10 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
     self.root = pathlib.Path(tempfile.mkdtemp())
     self.addCleanup(shutil.rmtree, self.root)
     test_results_reader._write_results(self.root)
+    # Chat() refuses to start without credentials; give the tests a key.
+    env = mock.patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    env.start()
+    self.addCleanup(env.stop)
 
   def test_builds_the_generated_agent_in_process(self):
     session = chat.Chat(self.root)
@@ -59,11 +64,40 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
         "os.environ",
         {"GOOGLE_GENAI_USE_VERTEXAI": "TRUE", "GOOGLE_CLOUD_PROJECT": "p"},
     ):
-      with_key = chat.Chat(self.root, api_key="k")
+      with_key = chat.Chat(self.root, api_key="AIzaKey")
+      # Older google-adk releases build their own client from the environment,
+      # so the explicit key must be mirrored there too.
+      self.assertEqual(os.environ["GOOGLE_API_KEY"], "AIzaKey")
+      self.assertEqual(os.environ["GOOGLE_GENAI_USE_VERTEXAI"], "FALSE")
+    with mock.patch.dict(
+        "os.environ",
+        {"GOOGLE_GENAI_USE_VERTEXAI": "TRUE", "GOOGLE_CLOUD_PROJECT": "p"},
+    ):
       from_env = chat.Chat(self.root)
     self.assertIsNotNone(with_key._agent.model.client)
     self.assertFalse(with_key._agent.model.client.vertexai)
     self.assertIsNone(from_env._agent.model.client)
+
+  def test_missing_credentials_fail_early_with_guidance(self):
+    with mock.patch.dict("os.environ", {}, clear=True):
+      with self.assertRaisesRegex(ValueError, "GOOGLE_API_KEY"):
+        chat.Chat(self.root)
+    with mock.patch.dict("os.environ", {"GOOGLE_API_KEY": "AIzaKey"}, clear=True):
+      self.assertIsNone(chat.Chat(self.root)._agent.model.client)
+
+  def test_vertex_express_key_uses_vertex_backend_when_asked(self):
+    with mock.patch.dict(
+        "os.environ", {"GOOGLE_CLOUD_PROJECT": "p", "GOOGLE_API_KEY": "old"}
+    ):
+      session = chat.Chat(self.root, api_key="express", vertexai=True)
+      self.assertEqual(os.environ["GOOGLE_API_KEY"], "express")
+      self.assertEqual(os.environ["GOOGLE_GENAI_USE_VERTEXAI"], "TRUE")
+      # An express mode key must not be paired with a project.
+      self.assertNotIn("GOOGLE_CLOUD_PROJECT", os.environ)
+    self.assertTrue(session._agent.model.client.vertexai)
+    # Keys default to the Gemini API whatever they look like.
+    default = chat.Chat(self.root, api_key="AQ.looks-like-express")
+    self.assertFalse(default._agent.model.client.vertexai)
 
   async def test_ask_collects_tool_calls_and_answer_per_session(self):
     session = chat.Chat(self.root)
