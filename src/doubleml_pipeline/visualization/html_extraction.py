@@ -1194,10 +1194,11 @@ def generate_html_report(output_dir: str) -> str | None:
                 <button type="button" class="ai-btn ai-btn-secondary" onclick="resetAiChat()">Reset Chat</button>
             </div>
             <div class="ai-preset-bar">
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Summarize the overall incremental impact, ROI, 95% confidence intervals, and key takeaways.')">Executive Summary &amp; ROI</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Which treatment is most effective, how reliable is its estimate, and what is its break-even gross margin?')">Treatment Comparison</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('When and where do treatment effects vary? Summarize the modeled CATE heterogeneity and note any dimensions that are not modeled.')">CATE Heterogeneity (When &amp; Where)</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('How robust are the causal estimates across repetitions and to unobserved confounders?')">Robustness &amp; Sensitivity</button>
+                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Give me the full review of this run: result summary, analysis setup, overall ROI with its verdict against the ROI threshold, where and when it works, what amplifies it, recommended actions, and caveats. Label each statement as fact (input data), inference (model estimate) or hypothesis.')">Full Review</button>
+                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Summarize the overall spend, incremental impact and ROI with its 95% interval and the verdict against the ROI threshold.')">Overall ROI</button>
+                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Where does it work? Rank stores or regions and products by ROI, name the ones worth and not worth investing in, and flag low-sample or implausible segments.')">Where It Works</button>
+                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('When does it work? Compare months of the year (and weekdays if the data is daily) by ROI and spend.')">When It Works</button>
+                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('How far can the estimates be trusted? Cover repetition stability, sensitivity to confounding, which covariates the effect depends on and the strength of that evidence.')">Can We Trust It</button>
                 <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('If the pipeline optimized the budget, where and when does the optimized allocation move spend, what does the model expect from it, and what assumptions and warnings apply?')">Budget Optimization</button>
             </div>
             <div id="ai_chat_thread" class="ai-chat-thread"></div>

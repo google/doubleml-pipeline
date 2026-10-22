@@ -15,9 +15,8 @@
 """Analysis tool implementations for CausalResultsReader."""
 
 from . import budget_optimization
-from . import effect_heterogeneity
-from . import effect_trend
+from . import effects_by
+from . import model_diagnostics
 from . import overview
-from . import robustness_checks
-from . import segment_effects
+from . import segment_profile
 from . import treatment_effects

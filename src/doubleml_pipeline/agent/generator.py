@@ -32,9 +32,25 @@ from . import results_reader
 
 DEFAULT_AGENT_MODEL = "gemini-3.8-flash"
 DEFAULT_AGENT_NAME = "causal_ml_insight_agent"
+AGENT_DESCRIPTION = (
+    "Explains the causal effects estimated by doubleml-pipeline and turns"
+    " them into decision-ready insights."
+)
 AGENTS_DIRNAME = "agents"
 # Not resolve(): that would follow per-file symlinks out of the package.
-BUNDLED_SKILLS_DIR = pathlib.Path(__file__).absolute().parent.parent / "skills"
+_PACKAGE_DIR = pathlib.Path(__file__).absolute().parent.parent
+BUNDLED_SKILLS_DIR = _PACKAGE_DIR / "skills"
+# The schema of the pipeline's output files is maintained once, in docs/, and
+# copied into every generated skill as a reference so that the agent can look
+# up what a file or column means.
+OUTPUT_SCHEMA_DOC = _PACKAGE_DIR / "docs" / "output_csv_schema.md"
+_SCHEMA_REFERENCE = pathlib.Path("references") / OUTPUT_SCHEMA_DOC.name
+# Sections of the schema worth embedding in the browser assistant, which
+# cannot read files: the table the tools aggregate and the CATE coefficients.
+_BROWSER_SCHEMA_SECTIONS = (
+    "consolidated_1a_full_df.csv",
+    "cate_coef_dict_pooling.csv",
+)
 
 _SKILL_FILE = "SKILL.md"
 
@@ -62,10 +78,7 @@ $runs}
 root_agent = Agent(
     name=$agent_name,
     model=$model,
-    description=(
-        "Explains the causal effects estimated by doubleml-pipeline and turns"
-        " them into decision-ready insights."
-    ),
+    description=$description,
     instruction=INSTRUCTION,
     tools=[
         *CausalResultsReader(_RUNS).tools(),
@@ -175,6 +188,7 @@ def generate_agent(
   (agent_dir / "agent.py").write_text(
       _AGENT_PY.substitute(
           agent_name=json.dumps(agent_name),
+          description=json.dumps(AGENT_DESCRIPTION),
           model=json.dumps(model),
           runs=runs,
       ),
@@ -186,12 +200,42 @@ def generate_agent(
     shutil.rmtree(skills_copy)
   for skill in skills:
     _copy_contents(skill, skills_copy / skill.name)
+    _bundle_schema_reference(skills_copy / skill.name)
   return agent_dir
+
+
+def _bundle_schema_reference(skill_dir: pathlib.Path) -> None:
+  """Copies the output schema into the skill's references, if available."""
+  if OUTPUT_SCHEMA_DOC.is_file():
+    target = skill_dir / _SCHEMA_REFERENCE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(OUTPUT_SCHEMA_DOC, target)
 
 
 def _relative_posix(path: pathlib.Path, start: pathlib.Path) -> str:
   """Returns `path` relative to `start`, with forward slashes."""
   return pathlib.Path(os.path.relpath(path, start)).as_posix()
+
+
+def schema_excerpt(
+    sections: Sequence[str] = _BROWSER_SCHEMA_SECTIONS,
+    schema_doc: pathlib.Path = OUTPUT_SCHEMA_DOC,
+) -> str:
+  """Returns the `#### <file>` sections of the output schema in `sections`.
+
+  Returns an empty string if the document is missing.
+  """
+  if not schema_doc.is_file():
+    return ""
+  wanted = {f"#### `{name}`" for name in sections}
+  kept: list[str] = []
+  keep = False
+  for line in schema_doc.read_text(encoding="utf-8").splitlines():
+    if line.startswith("#"):
+      keep = line.strip() in wanted
+    if keep:
+      kept.append(line)
+  return "\n".join(kept).strip()
 
 
 def build_browser_system_instruction(
@@ -209,13 +253,17 @@ def build_browser_system_instruction(
           f"--- Bundled Skill ({rel_name}) ---\n"
           + md_path.read_text(encoding="utf-8").strip()
       )
+  excerpt = schema_excerpt()
+  if excerpt:
+    parts.append("--- Output schema (excerpt) ---\n" + excerpt)
   parts.append(
       "Browser Report Mode\n"
       "- In this HTML report, all deterministic outputs from the"
       " CausalResultsReader tools ("
       + ", ".join(results_reader.TOOL_NAMES)
       + ") are already precomputed and provided in the"
-      " causalAnalysisSnapshot JSON block.\n"
+      " causalAnalysisSnapshot JSON block. get_segment_profile is not"
+      " precomputed; say so when it would be needed.\n"
       "- Respond in English by default unless the user writes in another"
       " language."
   )

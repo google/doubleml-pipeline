@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tool: get_robustness_checks."""
+"""Tool: get_model_diagnostics."""
 
 from typing import Any, Dict, List, Optional
+
 import pandas as pd
 
 from . import base
+from . import cate_model
 
 _LEAST_ROBUST_SEGMENTS = 5
+_SENSITIVITY_COLUMNS = (
+    "treatment",
+    "scope",
+    "group",
+    "robustness_value",
+    "benchmark_cf_d",
+    "benchmark_cf_y",
+    "benchmark_covariate",
+)
 
 
 def _repetition_stability(
@@ -27,6 +38,9 @@ def _repetition_stability(
 ) -> List[Dict[str, Any]]:
   """Summarizes the total effect across cross-fitting repetitions."""
   reps = run.read_csv(base.REPETITIONS_FILE, "Re-run the full pipeline.")
+  base.require_columns(
+      reps, ["d_col", "Model Group", "total_estimated_incremental_KPI"]
+  )
   reps = reps[reps["d_col"].isin(treatments)]
   kpi = reps.groupby("d_col")["total_estimated_incremental_KPI"]
   stability = pd.DataFrame({
@@ -52,6 +66,7 @@ def _confounding_sensitivity(
   sensitivity = run.read_csv(
       base.SENSITIVITY_FILE, "Re-run the pipeline with run_sensitivity=True."
   )
+  base.require_columns(sensitivity, _SENSITIVITY_COLUMNS)
   sensitivity = sensitivity[sensitivity["treatment"].isin(treatments)]
   if sensitivity.empty:
     raise base.UnavailableError(f"No sensitivity results for {treatments}.")
@@ -68,9 +83,7 @@ def _confounding_sensitivity(
     sensitivity = sensitivity.assign(
         group_name=[
             names.get(scope, {}).get(str(group))
-            for scope, group in zip(
-                sensitivity["scope"], sensitivity["group"]
-            )
+            for scope, group in zip(sensitivity["scope"], sensitivity["group"])
         ]
     )
   is_overall = sensitivity["scope"] == "total"
@@ -96,13 +109,24 @@ def _confounding_sensitivity(
   }
 
 
-def _run_robustness_checks(
+def _cate_models(run: base.RunData, treatments: List[str]) -> Dict[str, Any]:
+  """The CATE specification per treatment, or why it is unavailable."""
+  models = {}
+  for treatment in treatments:
+    try:
+      models[treatment] = cate_model.describe(run, treatment)
+    except base.UnavailableError as e:
+      models[treatment] = {"status": "unavailable", "reason": str(e)}
+  return models
+
+
+def _run_model_diagnostics(
     run: base.RunData, treatment: Optional[str] = None
 ) -> base.ToolResult:
-  """Returns robustness checks for a single run."""
+  """Returns the diagnostics of a single run."""
   treatment = run.resolve_treatment(treatment, allow_all=True)
   treatments = [treatment] if treatment else run.treatments
-  result = {}
+  result: Dict[str, Any] = {}
   for key, check in (
       ("repetition_stability", _repetition_stability),
       ("confounding_sensitivity", _confounding_sensitivity),
@@ -111,14 +135,15 @@ def _run_robustness_checks(
       result[key] = check(run, treatments)
     except base.UnavailableError as e:
       result[key] = {"status": "unavailable", "reason": str(e)}
+  result["cate_model"] = _cate_models(run, treatments)
   return result
 
 
 @base.agent_tool
-def get_robustness_checks(
+def get_model_diagnostics(
     self, treatment: Optional[str] = None
 ) -> base.ToolResult:
-  """Assesses how far the causal estimates can be trusted.
+  """Assesses how far the estimates can be trusted and what they depend on.
 
   repetition_stability: spread of each treatment's total incremental KPI
   across repeated cross-fitting runs (share_positive near 0 or 1 and a low
@@ -131,6 +156,10 @@ def get_robustness_checks(
   (benchmark_covariate) could not. It cannot rule out stronger omitted
   drivers, such as other channels that were not adjusted for. Segment-level
   results are summarized with their least robust segments.
+  cate_model: the fitted conditional-effect specification per treatment: its
+  structure, basis terms with coefficients and p-values, covariate_evidence
+  (strong/weak/none with the p-value) telling which covariates the per-unit
+  effect depends on, and the distribution of the row-level per-unit effect.
 
   Args:
     treatment: Treatment to check. Defaults to all treatments of all runs.
@@ -138,9 +167,9 @@ def get_robustness_checks(
   if treatment is None:
     return {
         "runs": [
-            {"run": name, **_run_robustness_checks(run, None)}
+            {"run": name, **_run_model_diagnostics(run, None)}
             for name, run in self._runs.items()  # pylint: disable=protected-access
         ]
     }
   name, run = self._route(treatment)  # pylint: disable=protected-access
-  return {"run": name, **_run_robustness_checks(run, treatment)}
+  return {"run": name, **_run_model_diagnostics(run, treatment)}

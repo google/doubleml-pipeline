@@ -17,3 +17,23 @@
 from .generator import generate_agent
 from .instruction import INSTRUCTION
 from .results_reader import CausalResultsReader
+
+# `Chat`, `Turn` and `ask` import google.adk, which the pipeline itself does
+# not need, so they are loaded on first use.
+_CHAT_EXPORTS = ("Chat", "Turn", "ask")
+
+
+def __getattr__(name: str):
+  if name in _CHAT_EXPORTS:
+    from . import chat  # pylint: disable=g-import-not-at-top
+
+    return getattr(chat, name)
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "CausalResultsReader",
+    "INSTRUCTION",
+    "generate_agent",
+    *_CHAT_EXPORTS,
+]

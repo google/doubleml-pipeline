@@ -26,4 +26,4 @@ dependencies = [
 dev = ["pytest", "mypy", "black", "isort"]
 
 [tool.setuptools.package-data]
-doubleml_pipeline = ["skills/**/*"]
+doubleml_pipeline = ["skills/**/*", "docs/output_csv_schema.md"]

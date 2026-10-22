@@ -704,13 +704,16 @@ serverless in-browser `AI Assistant (Gemini)` tab in `report.html`).
 
 Tool                                                                  | Answers
 --------------------------------------------------------------------- | -------
-`get_analysis_overview()`                                             | Outcome, treatments, period, segment dimensions and available analyses.
-`get_treatment_effects()`                                             | Incremental KPI with 95% interval, effect per unit, ROI on spend and outcome share per treatment.
-`get_segment_effects(dimension, treatment=None, sort_by='incremental_kpi', top_n=10)` | Highest and lowest geo or item segments, the spread of the effect, and whether segment-specific effects are modeled at all.
-`get_effect_trend(treatment=None, granularity='month')`               | Effect per week, month, quarter, year or calendar month, and the variables through which it can change.
-`get_effect_heterogeneity(treatment=None, bins=4)`                    | Per-unit effect (CATE) across quantile bins of each CATE covariate, with a significance test.
-`get_robustness_checks(treatment=None)`                               | Stability across repetitions and sensitivity to unobserved confounding.
+`get_analysis_overview()`                                             | Outcome, data (rows, daily/weekly frequency, period, segment dimensions), treatments, the ROI threshold, the keys `get_effects_by` accepts and the available analyses.
+`get_treatment_effects()`                                             | Incremental KPI with 95% interval, effect per unit, ROI on spend and outcome share per treatment, with the reliability signals `roi_vs_threshold` (`worth_investing` / `not_worth_investing` / `undetermined`), `low_sample` and `plausibility_flags`.
+`get_effects_by(by, treatment=None, cross_with=None, bins=4, within=None, start=None, end=None, sort_by='incremental_kpi', page=1, page_size=50)` | The effect broken down by a segment dimension (`geo`, `item`), a period (`week`, `month`, `quarter`, `year`, `month_of_year`, `day_of_week` for daily data) or any input column (quantile bins, optionally cut `within` each geo or item), optionally crossed with a second key into a 2-D table, restricted to a `start` / `end` date window and paged. Reports `data_period`, `window`, `threshold_summary`, `ci_separation`, `low_sample_groups`, `column_role`, `effect_drivers` and `heterogeneity_evidence`.
+`get_segment_profile(dimension, segment, treatment=None, columns=None)` | One geo or item in the input data before estimation: size, outcome share, treatment intensity and spend share, and its covariates against the overall mean. The check behind implausible or outlying estimates.
+`get_model_diagnostics(treatment=None)`                               | Stability across repetitions, sensitivity to unobserved confounding, and the fitted CATE specification with per-covariate evidence (`strong (p=...)`, `weak`, `none`).
 `get_budget_optimization(treatment=None, dimension='total', granularity='month', top_n=10)` | Optimized allocation of a run made with `optimize=True` (simple or saturation-aware): spend, incremental KPI and ROI before and after, overall, per date period or for the geos / items with the largest spend changes, with assumptions and warnings.
+
+`generate_agent` copies `docs/output_csv_schema.md` into each bundled skill as
+`references/output_csv_schema.md`, so the agent can look up what any output
+file or column means.
 
 ### Constant: `INSTRUCTION`
 

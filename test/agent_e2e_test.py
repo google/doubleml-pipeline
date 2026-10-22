@@ -27,6 +27,8 @@ from doubleml_pipeline.visualization import html_extraction
 import numpy as np
 import pandas as pd
 
+_FIRST_GEO = "G1"
+
 
 def _simulate(n_weeks: int = 40, seed: int = 0) -> pd.DataFrame:
   """Panel of geos x items x weeks with a known, demand-dependent effect."""
@@ -108,10 +110,9 @@ class AgentEndToEndTest(unittest.TestCase):
     calls = {
         "get_analysis_overview": {},
         "get_treatment_effects": {},
-        "get_segment_effects": {"dimension": "geo"},
-        "get_effect_trend": {"granularity": "quarter"},
-        "get_effect_heterogeneity": {},
-        "get_robustness_checks": {},
+        "get_effects_by": {"by": "geo"},
+        "get_segment_profile": {"dimension": "geo", "segment": _FIRST_GEO},
+        "get_model_diagnostics": {},
         "get_budget_optimization": {"dimension": "geo"},
     }
     self.assertCountEqual(calls, results_reader.TOOL_NAMES)
@@ -128,6 +129,19 @@ class AgentEndToEndTest(unittest.TestCase):
         self.assertEqual(result["status"], "ok", result)
         self.assertEqual(result["settings"]["optimizer"], "simple")
         self.assertTrue(result["matches_pipeline_totals"])
+
+  def test_effects_by_covers_every_advertised_key(self):
+    (overview,) = self.reader.get_analysis_overview()["runs"]
+    keys = overview["effects_by_keys"]
+    self.assertEqual(overview["data"]["frequency"], "weekly")
+    self.assertNotIn("day_of_week", keys["periods"])
+    for key in keys["segments"] + keys["periods"] + ["demand", "X1"]:
+      with self.subTest(key=key):
+        result = self.reader.get_effects_by(key)
+        self.assertEqual(result["status"], "ok", result)
+    crossed = self.reader.get_effects_by("demand", cross_with="geo", bins=2)
+    self.assertEqual(crossed["status"], "ok", crossed)
+    self.assertEqual(crossed["col_groups"], ["G1", "G2", "G3"])
 
   def test_recovers_positive_effect(self):
     (run,) = self.reader.get_treatment_effects()["runs"]

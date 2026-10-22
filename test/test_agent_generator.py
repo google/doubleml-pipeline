@@ -56,8 +56,14 @@ class GenerateAgentTest(unittest.TestCase):
         [p.name for p in agent_dir.iterdir()],
         ["__init__.py", "agent.py", ".env.example", "skills"],
     )
-    self.assertTrue(
-        (agent_dir / "skills" / "retail-analytics" / "SKILL.md").is_file()
+    skill_dir = agent_dir / "skills" / "retail-analytics"
+    self.assertTrue((skill_dir / "SKILL.md").is_file())
+    # The output schema is maintained in docs/ and bundled on generation.
+    self.assertEqual(
+        (skill_dir / "references" / "output_csv_schema.md").read_text(
+            encoding="utf-8"
+        ),
+        generator.OUTPUT_SCHEMA_DOC.read_text(encoding="utf-8"),
     )
 
   def test_generated_agent_is_loadable_by_adk(self):

@@ -114,9 +114,7 @@ def _require_optimization(run: base.RunData, treatment: str) -> str:
   return path
 
 
-def _optimizer_mode(
-    run: base.RunData, treatment: str, df: pd.DataFrame
-) -> str:
+def _optimizer_mode(run: base.RunData, treatment: str, df: pd.DataFrame) -> str:
   """Returns "saturation", "simple" or "linear_fallback"."""
   recorded = (
       (run.metadata.get("phase4_optimization") or {}).get(treatment) or {}
@@ -175,9 +173,7 @@ def _row_plan(
   kpi_col = f"estimated_incremental_KPI_{treatment}"
   base.require_columns(df, [c for c in (spend_col, kpi_col) if c])
   if not spend_col:
-    raise base.UnavailableError(
-        f"No spend column is mapped for {treatment!r}."
-    )
+    raise base.UnavailableError(f"No spend column is mapped for {treatment!r}.")
   spend = _numeric(df, spend_col)
   kpi = _numeric(df, kpi_col)
   if mode == _SATURATION:
@@ -257,10 +253,13 @@ def _settings(
   if mode == _SATURATION:
     recorded = (metadata.get("phase4_optimization") or {}).get(treatment) or {}
     settings.update({
-        "saturation_family": overall.get("saturation_family")
-        or metadata.get("saturation_family"),
-        "budget_mode": overall.get("budget_mode")
-        or metadata.get("budget_mode"),
+        "saturation_family": (
+            overall.get("saturation_family")
+            or metadata.get("saturation_family")
+        ),
+        "budget_mode": (
+            overall.get("budget_mode") or metadata.get("budget_mode")
+        ),
         "budget_increment": overall.get("budget_increment"),
         "budget_reallocate": overall.get("budget_reallocate"),
         "cap_quantile": overall.get("cap_quantile"),
@@ -274,21 +273,32 @@ def _settings(
 def _assumptions(settings: Dict[str, Any]) -> List[str]:
   """States what the optimized allocation assumes, in plain words."""
   assumptions = [
-      "Retrospective what-if: it re-plans the actual spend of the"
-      " optimization period with the fitted model. It is not a forecast for"
-      " future periods.",
-      "The optimized incremental KPI is computed by the same model from point"
-      " estimates. It is not observed, and no 95% interval applies to it.",
-      "Each treatment is optimized on its own; spend is never moved between"
-      " treatments or runs.",
+      (
+          "Retrospective what-if: it re-plans the actual spend of the"
+          " optimization period with the fitted model. It is not a forecast for"
+          " future periods."
+      ),
+      (
+          "The optimized incremental KPI is computed by the same model from"
+          " point estimates. It is not observed, and no 95% interval applies"
+          " to it."
+      ),
+      (
+          "Each treatment is optimized on its own; spend is never moved between"
+          " treatments or runs."
+      ),
   ]
   if settings["optimizer"] == _SATURATION:
     assumptions += [
-        f"Diminishing returns follow the {settings['saturation_family']}"
-        " saturation curve selected by the pipeline.",
-        "A row's spend never exceeds the historical level of its geo x item"
-        f" cell (cap_quantile={settings['cap_quantile']}), so no unobserved"
-        " spend level is extrapolated.",
+        (
+            f"Diminishing returns follow the {settings['saturation_family']}"
+            " saturation curve selected by the pipeline."
+        ),
+        (
+            "A row's spend never exceeds the historical level of its geo x item"
+            f" cell (cap_quantile={settings['cap_quantile']}), so no unobserved"
+            " spend level is extrapolated."
+        ),
         "No carryover: spend in one period does not affect later periods.",
     ]
     if settings["reallocate_within"] == "date":
@@ -307,8 +317,11 @@ def _assumptions(settings: Dict[str, Any]) -> List[str]:
       )
   else:
     assumptions += [
-        "Rows whose estimated ROI is below the threshold lose all their spend"
-        " and its incremental KPI; the freed budget is not reallocated.",
+        (
+            "Rows whose estimated ROI is below the threshold lose all their"
+            " spend and its incremental KPI; the freed budget is not"
+            " reallocated."
+        ),
         "The effect is linear in spend within a row (no saturation).",
     ]
   return assumptions
@@ -358,13 +371,16 @@ def _warnings(
 
 def _reconcile(totals: Dict[str, Any], overall: pd.Series) -> Optional[bool]:
   """Checks the recomputed totals against optimization_metrics.csv."""
-  pairs: List[Tuple[float, Any]] = [(
-      totals["spend_after"],
-      overall.get("optimized_total_cost_of_treatment_in_periods"),
-  ), (
-      totals["spend_before"],
-      overall.get("total_cost_of_treatment_in_periods"),
-  )]
+  pairs: List[Tuple[float, Any]] = [
+      (
+          totals["spend_after"],
+          overall.get("optimized_total_cost_of_treatment_in_periods"),
+      ),
+      (
+          totals["spend_before"],
+          overall.get("total_cost_of_treatment_in_periods"),
+      ),
+  ]
   checked = [(a, float(b)) for a, b in pairs if pd.notna(b)]
   if not checked:
     return None
@@ -414,9 +430,9 @@ def _run_budget_optimization(
   mode = _optimizer_mode(run, treatment, df)
   settings = _settings(run, treatment, overall_metrics, mode)
   scope = _scope_mask(run, df, overall_metrics, mode, settings)
-  plan = _row_plan(
-      run, treatment, df, mode, settings["threshold_roi"]
-  ).loc[scope]
+  plan = _row_plan(run, treatment, df, mode, settings["threshold_roi"]).loc[
+      scope
+  ]
   if plan.empty:
     raise base.UnavailableError("No rows fall in the optimization period.")
 
@@ -429,8 +445,8 @@ def _run_budget_optimization(
   reconciled = _reconcile(totals, overall_metrics)
   result: Dict[str, Any] = {
       "treatment": treatment,
-      "spend_column": (run.metadata.get("treatment_spend_cols") or {}).get(
-          treatment
+      "spend_column": (
+          (run.metadata.get("treatment_spend_cols") or {}).get(treatment)
       ),
       "settings": settings,
       "assumptions": _assumptions(settings),
@@ -514,7 +530,5 @@ def get_budget_optimization(
   name, run = self._route(treatment)  # pylint: disable=protected-access
   return {
       "run": name,
-      **_run_budget_optimization(
-          run, treatment, dimension, granularity, top_n
-      ),
+      **_run_budget_optimization(run, treatment, dimension, granularity, top_n),
   }

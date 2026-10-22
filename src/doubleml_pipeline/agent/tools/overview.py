@@ -15,23 +15,25 @@
 """Tool: get_analysis_overview."""
 
 import re
-from typing import Dict
+from typing import Any, Dict
 
 from . import base
 from . import budget_optimization
+from . import grouping
 
 _LAG_PATTERN = re.compile(r"_l\d+$")
 
 
 def _analysis_availability(run: base.RunData) -> Dict[str, bool]:
+  has_results = run.has_file(base.FULL_DF_FILE)
   return {
-      "get_treatment_effects": run.has_file(base.FULL_DF_FILE),
-      "get_segment_effects": bool(run.dimensions),
-      "get_effect_trend": bool(run.metadata.get("date_col")),
-      "get_effect_heterogeneity": any(run.cate_covariates.values()),
-      "get_robustness_checks": (
+      "get_treatment_effects": has_results,
+      "get_effects_by": has_results,
+      "get_segment_profile": has_results and bool(run.dimensions),
+      "get_model_diagnostics": (
           run.has_file(base.REPETITIONS_FILE)
           or run.has_file(base.SENSITIVITY_FILE)
+          or run.has_file(base.CATE_COEF_FILE)
       ),
       "get_budget_optimization": budget_optimization.optimization_available(
           run
@@ -39,35 +41,13 @@ def _analysis_availability(run: base.RunData) -> Dict[str, bool]:
   }
 
 
-def _run_overview(run: base.RunData) -> base.ToolResult:
-  """Returns analysis overview for a single run."""
+def _data_summary(run: base.RunData) -> Dict[str, Any]:
+  """Shape of the input data: rows, period, frequency and segment counts."""
   metadata = run.metadata
-  date_col = metadata.get("date_col")
-  treatment_types = metadata.get("treatment_types") or {}
-  spend_cols = metadata.get("treatment_spend_cols") or {}
-  confounders = dict(zip(run.treatments, metadata.get("x_cols_list") or []))
-  availability = _analysis_availability(run)
-  period = None
-  if date_col:
-    period = {
-        "date_column": date_col,
-        "start": metadata.get("date_col_min"),
-        "end": metadata.get("date_col_max"),
-    }
-  return {
-      "outcome": run.outcome,
-      "period": period,
-      "treatments": [
-          {
-              "name": treatment,
-              "type": treatment_types.get(treatment, "spend"),
-              "spend_column": spend_cols.get(treatment),
-              "is_lagged": bool(_LAG_PATTERN.search(treatment)),
-              "adjusted_for": confounders.get(treatment, []),
-              "cate_covariates": run.cate_covariates.get(treatment, []),
-          }
-          for treatment in run.treatments
-      ],
+  summary: Dict[str, Any] = {
+      "rows": len(run.full_df()) if run.has_file(base.FULL_DF_FILE) else None,
+      "frequency": run.data_frequency,
+      "period": None,
       "segment_dimensions": {
           dim: {
               "column": column,
@@ -75,6 +55,42 @@ def _run_overview(run: base.RunData) -> base.ToolResult:
           }
           for dim, column in run.dimensions.items()
       },
+  }
+  if run.date_col:
+    summary["period"] = {
+        "date_column": run.date_col,
+        "start": metadata.get("date_col_min"),
+        "end": metadata.get("date_col_max"),
+    }
+  return summary
+
+
+def _run_overview(run: base.RunData) -> base.ToolResult:
+  """Returns analysis overview for a single run."""
+  metadata = run.metadata
+  treatment_types = metadata.get("treatment_types") or {}
+  availability = _analysis_availability(run)
+  return {
+      "outcome": run.outcome,
+      "data": _data_summary(run),
+      "treatments": [
+          {
+              "name": treatment,
+              "type": treatment_types.get(treatment, "spend"),
+              "spend_column": run.spend_cols.get(treatment),
+              "is_lagged": bool(_LAG_PATTERN.search(treatment)),
+              "saturation_family": run.saturation_family.get(treatment),
+              "adjusted_for": run.confounders.get(treatment, []),
+              "cate_covariates": run.cate_covariates.get(treatment, []),
+          }
+          for treatment in run.treatments
+      ],
+      "threshold_roi": run.threshold_roi,
+      "effects_by_keys": (
+          grouping.available_keys(run)
+          if availability["get_effects_by"]
+          else None
+      ),
       "available_analyses": [k for k, ok in availability.items() if ok],
       "unavailable_analyses": [k for k, ok in availability.items() if not ok],
   }
@@ -84,11 +100,13 @@ def _run_overview(run: base.RunData) -> base.ToolResult:
 def get_analysis_overview(self) -> base.ToolResult:
   """Describes each pipeline run and which analyses are available.
 
-  Call this first. Per run: the outcome KPI, the analysis period, each
-  treatment (type, spend column, confounders adjusted for, CATE covariates),
-  the segment dimensions, and the available and unavailable analysis tools.
-  Runs are estimated separately: compare their treatments side by side, but
-  never add their effects up.
+  Call this first. Per run: the outcome KPI; the data (rows, sampling
+  frequency such as daily or weekly, period, segment dimensions); each
+  treatment (type, spend column, confounders adjusted for, CATE covariates);
+  the ROI threshold that roi_vs_threshold verdicts refer to; the keys that
+  get_effects_by accepts (segments, periods and input columns); and the
+  available and unavailable analysis tools. Runs are estimated separately:
+  compare their treatments side by side, but never add their effects up.
   """
   return {
       "runs": [

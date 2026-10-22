@@ -25,11 +25,11 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 from .tools import base
 from .tools import budget_optimization
-from .tools import effect_heterogeneity
-from .tools import effect_trend
+from .tools import effects_by
+from .tools import grouping
+from .tools import model_diagnostics
 from .tools import overview
-from .tools import robustness_checks
-from .tools import segment_effects
+from .tools import segment_profile
 from .tools import treatment_effects
 
 ToolResult = base.ToolResult
@@ -38,11 +38,19 @@ ToolResult = base.ToolResult
 TOOL_NAMES = (
     "get_analysis_overview",
     "get_treatment_effects",
-    "get_segment_effects",
-    "get_effect_trend",
-    "get_effect_heterogeneity",
-    "get_robustness_checks",
+    "get_effects_by",
+    "get_segment_profile",
+    "get_model_diagnostics",
     "get_budget_optimization",
+)
+
+# Period keys precomputed for the browser snapshot; finer ones would bloat it.
+_SNAPSHOT_PERIODS = (
+    "month",
+    "quarter",
+    "year",
+    grouping.MONTH_OF_YEAR,
+    grouping.DAY_OF_WEEK,
 )
 
 
@@ -97,74 +105,58 @@ class CausalResultsReader:
     return [getattr(self, name) for name in TOOL_NAMES]
 
   def snapshot(self) -> Dict[str, Any]:
-    """Returns precomputed outputs of all tools for embedding in HTML reports."""
-    overview_res = self.get_analysis_overview()
+    """Returns precomputed outputs of all tools for embedding in HTML reports.
+
+    `get_segment_profile` takes a free-form segment and is not precomputed.
+    """
     treatments = list(self._run_of)
-    segment_res: Dict[str, Any] = {}
-    trend_res: Dict[str, Any] = {}
-    if len(self._runs) == 1:
-      segment_res["overall"] = {
-          dim: self.get_segment_effects(dim) for dim in base.DIMENSIONS
-      }
-      trend_res["overall"] = {
-          gran: self.get_effect_trend(granularity=gran)
-          for gran in ("month", "quarter", "year", "month_of_year")
-      }
-    if len(treatments) > 1 or len(self._runs) > 1:
-      segment_res["by_treatment"] = {
-          t: {
-              dim: self.get_segment_effects(dim, treatment=t)
-              for dim in base.DIMENSIONS
-          }
-          for t in treatments
-      }
-      trend_res["by_treatment"] = {
-          t: {
-              gran: self.get_effect_trend(treatment=t, granularity=gran)
-              for gran in ("month", "month_of_year")
-          }
-          for t in treatments
-      }
     return {
-        "get_analysis_overview": overview_res,
+        "get_analysis_overview": self.get_analysis_overview(),
         "get_treatment_effects": self.get_treatment_effects(),
-        "get_segment_effects": segment_res,
-        "get_effect_trend": trend_res,
-        "get_effect_heterogeneity": {
-            t: self.get_effect_heterogeneity(treatment=t) for t in treatments
+        "get_effects_by": {t: self._effects_by_snapshot(t) for t in treatments},
+        "get_model_diagnostics": self.get_model_diagnostics(),
+        "get_budget_optimization": {
+            t: self._optimization_snapshot(t) for t in treatments
         },
-        "get_robustness_checks": self.get_robustness_checks(),
-        "get_budget_optimization": self._optimization_snapshot(treatments),
     }
 
-  def _optimization_snapshot(self, treatments: List[str]) -> Dict[str, Any]:
-    """Returns get_budget_optimization per treatment and dimension."""
+  def _effects_by_snapshot(self, treatment: str) -> Dict[str, Any]:
+    """get_effects_by per segment dimension, period and CATE covariate."""
+    _, run = self._route(treatment)
+    keys = grouping.available_keys(run)
     snapshot: Dict[str, Any] = {}
-    for treatment in treatments:
-      total = self.get_budget_optimization(treatment=treatment)
-      if total["status"] != "ok":
-        snapshot[treatment] = {"total": total}
-        continue
-      snapshot[treatment] = {
-          "total": total,
-          "date": self.get_budget_optimization(
-              treatment=treatment, dimension="date"
-          ),
-          **{
-              dim: self.get_budget_optimization(
-                  treatment=treatment, dimension=dim
-              )
-              for dim in base.DIMENSIONS
-          },
-      }
+    for key in keys["segments"]:
+      snapshot[key] = self.get_effects_by(key, treatment=treatment)
+    for key in keys["periods"]:
+      if key in _SNAPSHOT_PERIODS:
+        snapshot[key] = self.get_effects_by(key, treatment=treatment)
+    for covariate in run.cate_covariates.get(treatment, []):
+      if covariate in keys["columns"] and covariate not in snapshot:
+        snapshot[covariate] = self.get_effects_by(
+            covariate, treatment=treatment
+        )
     return snapshot
+
+  def _optimization_snapshot(self, treatment: str) -> Dict[str, Any]:
+    """get_budget_optimization for the treatment, per dimension."""
+    total = self.get_budget_optimization(treatment=treatment)
+    if total["status"] != "ok":
+      return {"total": total}
+    return {
+        "total": total,
+        **{
+            dim: self.get_budget_optimization(
+                treatment=treatment, dimension=dim
+            )
+            for dim in ("date", *base.DIMENSIONS)
+        },
+    }
 
   get_analysis_overview = overview.get_analysis_overview
   get_treatment_effects = treatment_effects.get_treatment_effects
-  get_segment_effects = segment_effects.get_segment_effects
-  get_effect_trend = effect_trend.get_effect_trend
-  get_effect_heterogeneity = effect_heterogeneity.get_effect_heterogeneity
-  get_robustness_checks = robustness_checks.get_robustness_checks
+  get_effects_by = effects_by.get_effects_by
+  get_segment_profile = segment_profile.get_segment_profile
+  get_model_diagnostics = model_diagnostics.get_model_diagnostics
   get_budget_optimization = budget_optimization.get_budget_optimization
 
   def _route(self, treatment: Optional[str]) -> Tuple[str, base.RunData]:
