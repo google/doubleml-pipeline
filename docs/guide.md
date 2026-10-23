@@ -43,6 +43,14 @@ instructions.
 
 ---
 
+![Variable Selection - Unstable Estimation After VIF Reduction](../img/guide_41.png)
+
+---
+
+![Variable Selection - Reduced Predictors Setup](../img/guide_42.png)
+
+---
+
 ![Variable Selection - Successful Estimation Result](../img/guide_40.png)
 
 ---
