@@ -168,12 +168,13 @@ def compute_nuisance_combined_error(
   """Computes a normalized composite error metric from Y and T model errors.
 
   Contextual Error Shifting: For the exact same winning model architecture, its
-  computed `combined_error` will mathematically differ between Phase 1 and
+  computed `combined_error` will mathematically differ between Phase 2 and
   Phase 3. This is expected.
 
-  - Phase 1 Exploration (selection.py): Normalization spans across distinct
-    competing algorithmic combinations (e.g., XGBoost vs Ridge). The loss
-    measures inter-model algorithmic superiority.
+  - Phase 2 Shortlisting (selection.py, over the Phase 1 candidates):
+    Normalization spans across distinct competing algorithmic combinations
+    (e.g., XGBoost vs Ridge). The loss measures inter-model algorithmic
+    superiority.
   - Phase 3 Ensembling (workflow.py): Normalization strictly spans across
     data-splitting runs (e.g., rep_1..20) of the *same* winning model. The loss
     measures intra-model partition stability.

@@ -4268,10 +4268,8 @@ class CausalWorkflowOrchestrator:
         warnings.warn(
             "Optimization with multiple treatments is not yet supported."
         )
-      elif not self.simple_optimization and self.sat_family is None:
-        # Detailed optimization is only implemented for the
-        # saturation path; without it the legacy warning still applies.
-        warnings.warn("Detailed optimization is not yet supported.")
+      # `optimize=True` with `simple_optimization=False` and no saturation
+      # family is rejected by the constructor, so no other case remains.
 
     for d_col in self.d_cols:
       ttype = self.treatment_types.get(d_col, "spend")

@@ -188,7 +188,8 @@ def build_summary(
       "se": result.se,
       "linear_test_k": result.linear_test_k,
       "decision": result.decision,
-      # Linear-test outcome: "1se_pass" | "1se_fail" | "grid_edge_upper".
+      # Linear-test outcome: "1se_pass" | "1se_fail" | "grid_edge_upper" |
+      # "basis_ill_conditioned".
       "decision_reason": result.decision_reason,
       # Diag1 (eps(J) on the final grid), Diag2, Diag3,
       # Diag4 (phi_p(alpha_hat) and the linear references q_p / T_ref) and

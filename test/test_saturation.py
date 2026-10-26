@@ -468,6 +468,22 @@ class HalfSaturationGridTest(unittest.TestCase):
     with self.assertRaises(ValueError):
       saturation.resolve_grid_mode({"mode": "optuna"})
 
+  def test_manual_power_grid_is_linear(self):
+    """A manual `power` grid is linearly spaced whatever `scale` says."""
+    for cfg in (
+        {"mode": "manual", "min": 0.1, "max": 0.9, "num": 5},
+        {"mode": "manual", "min": 0.1, "max": 0.9, "num": 5, "scale": "log"},
+    ):
+      grid = saturation.build_half_saturation_grid(_treatment(), "power", cfg)
+      np.testing.assert_allclose(grid.alphas, np.linspace(0.1, 0.9, 5))
+      self.assertEqual(grid.coord_kind, "alpha")
+      np.testing.assert_allclose(grid.coord, grid.alphas)
+    with self.assertRaises(ValueError):
+      saturation.build_half_saturation_grid(
+          _treatment(), "power",
+          {"mode": "manual", "min": 0.1, "max": 0.9, "scale": "cubic"},
+      )
+
 
 class LinearSideTest(unittest.TestCase):
   """The linear side of the grid per family / layout."""

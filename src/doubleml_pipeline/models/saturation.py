@@ -1256,10 +1256,18 @@ def build_half_saturation_grid(
         for k, v in grid_cfg.items()
         if k in ("min", "max", "num", "scale") and v is not None
     }
-    alphas = build_alpha_grid(manual_cfg, family)
-    scale = str(grid_cfg.get("scale", "log") or "log").strip().lower()
+    scale = str(manual_cfg.get("scale", "log")).strip().lower()
+    if scale not in ("log", "linear"):
+      raise ValueError(
+          f"Unsupported saturation.grid.scale '{scale}' (use 'log' or"
+          " 'linear')."
+      )
     if family == "power":
-      scale = "linear"  # power grids are always linear.
+      # Power grids are always linear: alpha is an elasticity in (0, 1), so the
+      # manual `scale` only chooses the spacing of the other families.
+      scale = "linear"
+    manual_cfg["scale"] = scale
+    alphas = build_alpha_grid(manual_cfg, family)
     coord_kind = "log_alpha" if scale == "log" else "alpha"
     coord = np.log(alphas) if coord_kind == "log_alpha" else alphas.copy()
     t_half = np.asarray(half_saturation_point(family, alphas), float)

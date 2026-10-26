@@ -32,8 +32,11 @@ parallelization, model selection, and visual reporting.
 -   `covariates_for_cate_list` *(Optional[List[List[str]]])*: Variables to
     estimate Conditional Average Treatment Effects (CATE). Example:
     `[['geo_region'], ['store_type']]`.
--   `cate_structure_list` *(Optional[List[Any]])*: Specifies the CATE functional
-    form. Example: `['auto_additive', 'auto_additive']`.
+-   `cate_structure_list` *(Optional[List[Any]], default=None)*: Specifies the
+    CATE functional form per treatment (`'auto_additive'`, a patsy formula, or
+    a dict `{'type', 'df', 'degree', 'include_intercept'}`). `None` uses
+    `{'type': 'auto_additive', 'df': 3, 'degree': 2, 'include_intercept':
+    False}` for every treatment. Example: `['auto_additive', 'auto_additive']`.
 -   `time_budget` *(int, default=15)*: Time limit in seconds for FLAML AutoML
     tuning per model. Example: `30`.
 -   `date_col` *(Optional[str])*: Date column name. Example: `'date'`.
@@ -47,17 +50,25 @@ parallelization, model selection, and visual reporting.
     sensitivity bounds analysis. Example: `True`.
 -   `sensitivity_scope` *(Optional[List[str]], default=['total'])*: Scope for
     sensitivity bounds analysis. Options include `'total'`, `'geo'`, or
-    `'item'`. Example: `['total', 'item']`.
+    `'item'`. `'geo'` / `'item'` without the corresponding `geo_col` /
+    `item_col` raises `ValueError` at construction. Example:
+    `['total', 'item']`.
 -   `ground_truth_existence` *(bool, default=False)*: Set to `True` if ground
     truth treatment effects are available for evaluation. Example: `False`.
 -   `ground_truth_effect_column` *(Optional[List[str]], default=[])*: Column
     names containing ground truth effects for each treatment variable. Example:
     `['true_effect_discount', 'true_effect_tv']`.
 -   `treatment_types` *(Optional[Dict[str, str]], default=None)*: Treatment type
-    classification. Default type is `"spend"`. Note: Phase 4 ROI charts are
-    generated only for `"percentage"`, `"impressions"`, or `"price"` (requires
-    `treatment_spend_cols`). For `"spend"`, they are skipped as they are
-    redundant with Phase 5 optimization. Example:
+    classification. Allowed values are `'spend'` | `'percentage'` |
+    `'impressions'` | `'price'`; the default type is `"spend"` and any other
+    value raises `ValueError` in `run_full_pipeline`. A `'percentage'`
+    treatment must hold values in `[0, 1]` and requires a `sales_col` present
+    in `df` (`ValueError` otherwise). Note: Phase 4 ROI charts are generated
+    only for `"percentage"`, `"impressions"`, or `"price"`; these charts and
+    the optimization of such a treatment require both `treatment_spend_cols`
+    and `sales_col`, otherwise they are skipped with a warning. For
+    `"spend"`, they are skipped as they are redundant with the Phase 4
+    optimization. Example:
     `{'discount_rate': 'percentage', 'tv_spend': 'spend'}`.
 -   `treatment_spend_cols` *(Optional[Dict[str, str]], default=None)*: Maps
     treatment variables to their monetary spend columns. Automatically maps to
@@ -68,8 +79,8 @@ parallelization, model selection, and visual reporting.
 -   `peak_months` *(Optional[List[int]], default=None)*: List of peak months
     (1-12) to highlight in ROI charts. Defaults to `[3, 7, 11, 12]` if not
     specified. Example: `[11, 12]`.
--   `optimize` *(bool, default=False)*: Whether to run the optimization phase
-    (Phase 5). Example: `True`.
+-   `optimize` *(bool, default=False)*: Whether to run the Phase 4
+    optimization. Example: `True`.
 -   `simple_optimization` *(Optional[bool], default=None)*: Selects the
     optimizer. See the table below. `None` means **derive it**: `False` when a
     saturation family is configured (i.e. the `saturation` block is present,
@@ -81,11 +92,17 @@ parallelization, model selection, and visual reporting.
     saturation-aware optimizer is only implemented for `treatment_type='spend'`.
     Even with `False`, a treatment for which Phase 0 selects the linear model
     (`selected_family=None`) automatically uses the existing optimizer with a
-    warning; the value itself is not rewritten. The value in force is
+    warning; the value itself is not rewritten. Passing `True` explicitly
+    together with a configured family (spend treatments only) emits a
+    `UserWarning` that Phase 0's alpha estimate will be discarded by the
+    simple optimizer. The value in force is
     written to `metadata.json["simple_optimization"]` and shown in the HTML
     header (`Simple Optimization: True/False`). Example: `False`.
 -   `opt_periods` *(Optional[tuple[Any, Any]], default=None)*: Tuple of start
-    and end periods for optimization. Example: `('2023-01-01', '2023-12-31')`.
+    and end periods for optimization. If the start is after the end, or the
+    window lies outside the data's date range, a `UserWarning` is emitted and
+    `opt_periods` is reset to `None` (the full range). Example:
+    `('2023-01-01', '2023-12-31')`.
 -   `opt_threshold_roi` *(float, default=1.0)*: ROI
     threshold `r >= 0` (`workflow.DEFAULT_THRESHOLD_ROI = 1.0`). Defaults to
     `1.0` across every optimizer mode (`simple_optimization=True`,
@@ -163,9 +180,13 @@ defaulting to `'tanh'`); `None` means no block or an explicit `family: None`.
 | `True` | `True` | any | any | any | Existing simple optimizer (`opt_threshold_roi` applied per row). |
 | `True` | `False` | set | family | `spend`, one treatment | **Saturation-aware optimizer** (one KKT pass with the ROI cap, see `optimize_saturation`). |
 | `True` | `False` | set | `None` | `spend` | **Linear fallback**: warns *"saturation was not identified; falling back to linear optimization"* and runs the existing optimizer. |
-| `True` | `False` | set | any | `spend`, several treatments | Warns and **falls back to the existing optimizer** (saturation-aware optimization for several treatments is future work). |
+| `True` | `False` | set | any | `spend`, several treatments | Warns (`Optimization with multiple treatments is not yet supported.`) and runs **no** optimizer; optimization (either mode) is only performed for a single treatment (saturation-aware optimization for several treatments is future work). |
 | `True` | *(forced to `True`)* | any | any | `percentage` / `impressions` / `price` | `simple_optimization` is **forced to `True` at construction** (warning when it was `False`) and the existing optimizer runs; the saturation-aware optimizer needs a cost model `spend = g(treatment)` that is not specified yet. |
 | `True` | `False` | `None` | — | `spend` | **Raises `ValueError`** at construction. |
+
+All rows assume one treatment: with several treatments no optimization runs
+(both optimizers require `len(d_cols) <= 1`), and only the warnings are
+emitted.
 
 For `spend` treatments `simple_optimization=False` is never
 overridden to `True` when `saturation_config` is given (earlier versions did
@@ -188,14 +209,25 @@ that with a warning), and `budget_mode='roi_target'` together with
 > is meaningful. Phases 0–3 still run with saturation for these treatments; only
 > the Phase 4 optimizer falls back.
 
+> [!NOTE]
+> At the start of Phase 4, when the saturation-aware optimizer is in force
+> (`optimize=True`, `simple_optimization=False`, a configured family), the
+> orchestrator warns (console line and `UserWarning`) if a lag of a treatment
+> (`<d_col>_l<p>`, see `treatment_lag_covariates()`) is among that
+> treatment's `x_cols` or `covariates_for_cate`: the allocator assumes no
+> carryover (the response of a row depends on that row's spend only), which a
+> lagged treatment covariate violates. The message suggests
+> `optimization.reallocate_within = 'date'` or dropping the lags.
+
 **Saturation DML parameters:**
 
 Every saturation setting lives in **one** dictionary, `saturation_config`.
 Omit it and the previous behaviour is reproduced exactly.
 
 -   `saturation_config` *(Optional[Dict[str, Any]], default=None)*: The single
-    entry point for Saturation DML. Recognized top-level blocks are `saturation`,
-    `alpha_selection`, `final_fit` and `optimization`. **The presence of the
+    entry point for Saturation DML. Recognized top-level blocks are
+    `saturation`, `alpha_selection`, `final_fit` and `optimization`. **The
+    presence of the
     `saturation` block enables Phase 0.** Inside the block `family` defaults to
     `'tanh'`, and every other key has a sensible default, listed in the
     tables below. Example: `{'saturation': {'family': 'exp'}}`.
@@ -225,7 +257,7 @@ Omit it and the previous behaviour is reproduced exactly.
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
 | `family` | `str` | `'tanh'` if the block is present | `'tanh'` \| `'exp'` \| `'log'` \| `'power'`. If the `saturation` block is present and `family` is omitted, the family defaults to `'tanh'`. An omitted block, or an explicit `family: None`, keeps `family=None` (linear run). |
-| `grid.mode` | `str` | `'auto'` | `'auto'` uses a half-saturation grid `T_1/2 in [c_min*q50(T>0), c_max*q95(T>0)]`, log-spaced, for tanh/exp/log. `'power'` always uses a linear alpha grid. `'manual'` uses `min`/`max`/`scale`. A legacy config with `min`/`max` and no `mode` is treated as `'manual'`. |
+| `grid.mode` | `str` | `'auto'` | `'auto'` uses a half-saturation grid `T_1/2 in [c_min*q50(T>0), c_max*q95(T>0)]`, log-spaced, for tanh/exp/log; the auto grid for `'power'` is linear in alpha on `[0.1, 0.95]`. `'manual'` uses `min`/`max`/`scale`; the alphas follow `scale` (default `'log'`) for tanh/exp/log, while a `power` grid is always linear in alpha (`scale` is validated but ignored). A legacy config with `min`/`max` and no `mode` is treated as `'manual'`. |
 | `grid.c_min` / `grid.c_max` | `float` | `0.25` / `4.0` | Auto-grid range multipliers. |
 | `grid.max_extensions` | `int` | `2` | Maximum number of x4 extensions when the argmin sits on an auto-grid edge. |
 | `grid.min` | `float` | family lower bound | Smallest alpha searched (`manual` only). |
@@ -254,8 +286,9 @@ Family default bounds (manual mode): `'power'` -> `(0.05, 0.95)`; `'exp'`,
 | `sel_fraction` | `float` | `0.20` | Fraction of clusters put into `D_sel` (Stage A). |
 | `n_seeds` | `int` | `10` | Number of repeated cross-fitting partitions. |
 | `k_folds` | `int` | `5` | Folds per seed (cluster-level). |
-| `refine` | `str` | `'brent'` | `'brent'` for continuous refinement, `'none'` for grid argmin only. No other search method is supported. |
-| `linear_test_k` | `float` | `1.0` | Saturation is adopted iff `d_bar < -k*se`, where `d_bar` is the mean paired loss difference against the **identity candidate** `fbar_T = T / T_ref` and `se` is the **cluster-robust `se_obs`** of the per-observation differences `d_i` (clusters = the adopted key with fewer clusters; `G/(G-1)` correction). There is no across-seed se and no selector. Otherwise `selected_family=None`. |
+| `refine` | `str` | `'brent'` | `'brent'` for continuous refinement, `'none'` for grid argmin only. Any other value disables the refinement like `'none'` (no error). |
+| `linear_test_k` | `float` | `1.0` | Saturation is adopted iff `d_bar < -k*se`, where `d_bar` is the mean paired loss difference against the **identity candidate** `fbar_T = T / T_ref` and `se` is the **cluster-robust `se_obs`** of the per-observation differences `d_i`: two-way on the two adopted keys when both are known, one-way on the fewer-cluster key otherwise, iid without a key (each term with the `G/(G-1)` correction). There is no across-seed se and no selector. Otherwise `selected_family=None`; an argmin on the linear-side grid edge or an ill-conditioned T-basis (`cond(B) >= 1e8`) also adopts linear regardless of the 1-SE result (`decision_reason` = `grid_edge_upper` / `basis_ill_conditioned`). |
+| `linear_test_t_critical` | `bool` | `False` | Use the Student-t critical value `t_{G-1}^{-1}(Phi(k))` instead of `k` as the multiplier of `se` (`G` = clusters of the se; the smaller of the two counts for the two-way se). A non-bool raises `ValueError`. |
 | `fallback_half_saturation_T` | `Optional[float]` | `None` | A fixed half-saturation point in units of `T` (`T_knee` for `log`, `alpha` itself for `power`; on the Phase 0 scale `T / c`, i.e. comparable to `half_saturation_T` / `T_ref` in the JSON). Used downstream **when Diag1 or Diag2 fires** (the family is then kept, `fallback_half_saturation_T_used = true`); otherwise the 1-SE decision stands. Must be `> 0`. |
 | `flatness_ratio` | `float` | `10.0` | Diag2 threshold: fires when `T_1/2^max / T_1/2^min` over the 1-SE set `A_1SE` exceeds it (`T_knee` for `log`; `power` uses the fixed rule `alpha^max - alpha^min > 0.4`). Must be `> 1`. |
 | `t_ref_tolerance` | `float` | `1e-9` | Diag6 tolerance: relative error between the `T_ref` recomputed at the start of Phase 1 and the Phase 0 `T_ref`; the run stops with `TRefMismatchError` when it is reached. Must be `> 0`. |
@@ -282,6 +315,8 @@ Family default bounds (manual mode): `'power'` -> `(0.05, 0.95)`; `'exp'`,
 | `budget_mode` | `str` | `'fixed'` | `'fixed'`: the budget `K = (1 + budget_increment) x actual total of the target units` is allocated in one KKT pass. `'roi_target'`: no budget; every unit with `theta_t > 0` receives `min(T_bar_t, T_t^r)` (requires `opt_threshold_roi > 0`; `budget_increment` / `budget_reallocate` are ignored with an INFO line when explicitly passed). |
 | `budget_increment` | `float` | `0.0` | `fixed` only. `>= -1`. |
 | `budget_reallocate` | `bool` | `True` | `fixed` only. `True` (default): `K' = K`, one solve with the effective caps `min(T_bar_t, T_t^r)` -- the spend of negative-ROI units and the amount removed by the ROI cap are redistributed. `False`: `K' = K_+` (negative-ROI spend removed), one solve with the caps `T_bar_t`, then `T_t* = min(T_t^(1), T_t^r)` without redistribution (`unspent_budget`). |
+| `cap_quantile` | `float` | `1.0` (`optimization.DEFAULT_CAP_QUANTILE`) | Support cap `T_bar_t = max(Q_q(cell_t), T_t^actual)`: the `q`-quantile of the positive actual treatment within the unit's geo × item cell, floored at the unit's own actual value; `1.0` is the cell maximum. Must lie in `(0, 1]` (`ValueError` otherwise). |
+| `reallocate_within` | `str` | `'all'` | `'all'`: one KKT problem over all allocation units (spend moves across days, geos and items). `'date'`: one KKT problem per date with the per-date budget (no cross-day movement). Other values raise `ValueError` (`optimization.REALLOCATE_WITHIN`). |
 
 ##### Example 1: minimal
 
@@ -350,8 +385,8 @@ orch = CausalWorkflowOrchestrator(
                 # over [c_min * q50(T>0), c_max * q95(T>0)] and converted to
                 # alpha per family, so it is dimensionless by construction.
                 # When the argmin sits on an edge, the grid is extended by x4,
-                # at most `max_extensions` times. `power` always uses a
-                # linear alpha grid on [0.1, 0.95].
+                # at most `max_extensions` times. In `auto` mode `power` uses
+                # a linear alpha grid on [0.1, 0.95].
                 'mode': 'auto',
                 'c_min': 0.25,
                 'c_max': 4.0,
@@ -378,6 +413,7 @@ orch = CausalWorkflowOrchestrator(
             'refine': 'brent',          # default; 'brent' | 'none'
             'linear_test_k': 1.0,       # adopt iff d_bar < -k * se
                                         #   (se = cluster-robust se_obs)
+            'linear_test_t_critical': False,  # k itself, not a t value
             'fallback_half_saturation_T': None,  # used when Diag1/Diag2 fires
             'flatness_ratio': 10.0,     # Diag2 threshold
             't_ref_tolerance': 1.0e-9,  # Diag6 tolerance
@@ -400,6 +436,8 @@ orch = CausalWorkflowOrchestrator(
             'budget_mode': 'fixed',      # 'fixed' | 'roi_target'
             'budget_increment': 0.10,    # +10% budget (fixed only)
             'budget_reallocate': False,  # fixed only
+            'cap_quantile': 1.0,         # default; support cap = cell maximum
+            'reallocate_within': 'all',  # default; 'all' | 'date'
         },
     },
     # Optional scope of the allocation units (None = all).
@@ -547,11 +585,16 @@ When Phase 0 runs:
 -   The Phase 0 output files are written to `<output_dir>/step0_saturation/`
     with a prefix that states what each file belongs to: `summary_*` (the
     result: `summary_alpha_selection.json` / `.csv`, `summary_alpha_grid.csv`,
-    `summary_rloss_curves.csv`, `summary_alpha_profile_<treatment>.png`,
+    `summary_rloss_curves.csv`,
+    `summary_alpha_seed-wise_alpha_distribution.csv`,
+    `summary_alpha_profile_<treatment>.png`,
     `summary_phase0_diagnostics.json`), `diag1_*` … `diag6_*` (one or more
-    files per identification diagnostic; `diag6_t_ref_consistency.csv` is written
-    at the start of Phase 1) and `others_*` (grid construction, split / fold
-    bookkeeping, per-seed visualizations). With several treatments the
+    files per identification diagnostic; `diag6_t_ref_consistency.csv` is
+    written at the start of Phase 1) and `others_*` (supporting material
+    without a diagnostic rule: the Stage A split coverage —
+    `others_split_coverage.csv`,
+    `others_split_coverage_detail.csv` and `others_split_coverage.png`). With
+    several treatments the
     per-treatment files go to one sub-directory per treatment instead. See
     [`evaluation.saturation_evaluation`](#module-doubleml_pipelineevaluationsaturation_evaluation)
     and [`utils.io`](#module-doubleml_pipelineutilsio) (the file-name constants).
@@ -609,16 +652,45 @@ disk can execute arbitrary code).
 -   `ValueError`: If `df.index` has duplicated labels (raised before any
     phase runs, in both saturation and non-saturation runs). Fix with
     `df = df.reset_index(drop=True)`.
+-   `ValueError`: If a user-specified column (`y_col`, `d_cols`,
+    `x_cols_list`, `covariates_for_cate_list`, `date_col`, `geo_col`,
+    `item_col`, `geo_name_col`, `item_name_col`, `sales_col`,
+    `opt_other_cost_variables`, and `ground_truth_effect_column` when
+    `ground_truth_existence=True`) is missing from `df`; one message names
+    every offending parameter, with did-you-mean hints.
+-   `ValueError`: For an invalid `treatment_types` value, a `'percentage'`
+    treatment with values outside `[0, 1]` or without a valid `sales_col`, a
+    `treatment_spend_cols` column missing from `df`, or an
+    `opt_other_cost_variables` entry that is also in `d_cols` or
+    `treatment_spend_cols`.
+-   `ValueError`: At the start of Phase 0, if a saturated treatment is
+    configured with a *shifting* normalization (`standardize`,
+    `population_standardize`, `min_max`).
+-   `TRefMismatchError`: At the start of Phase 1, when Diag6 fails (see
+    below).
+
+#### `treatment_lag_covariates(self) -> Dict[str, List[str]]`
+
+Returns `{d_col: [lag columns]}` for every treatment that has at least one
+lag of itself — a column named `<d_col>_l<p>` as produced by
+`preprocessing.features.create_lagged_features` — among its `x_cols` or
+`covariates_for_cate`. Such a column is a function of past treatment; the
+Phase 4 warning described in the **Optimization modes** notes is built from
+this mapping. Treatments without such a column are absent from the result.
 
 #### `format_cate_equation(self, coef_dict)`
 
 Transforms CATE regression coefficients into a readable algebraic equation text
 string. **Parameters:**
 
--   `coef_dict` *(Dict[str, float])*: Regression coefficients dictionary. Example: `{'Intercept': 1.5, 'region_NA': 0.2}`.
+-   `coef_dict` *(Dict[str, float])*: The pooled `cate_coef_dict` with
+    `<name>_coef` keys; only keys ending in `_coef` are used (the suffix is
+    stripped, other suffixes such as `_stderr` / `_pvalue` are ignored).
+    Example: `{'Intercept_coef': 1.5, 'region_NA_coef': 0.2}`.
     **Returns:**
 
--   `str`: Formatted algebraic equation string.
+-   `str`: Formatted algebraic equation string, or `'Constant Effect'` when no
+    non-zero `_coef` term exists.
 
 #### `extract_priors(self, df_1a_consolidated, treatment_base_name, prior_type='roi', distribution_type='Normal')`
 
@@ -641,6 +713,52 @@ recomputed from the treatment column Phase 1 receives differs from the Phase 0
 `T_ref` by a relative error of at least `alpha_selection.t_ref_tolerance`
 (a unit or hand-over bug). `diag6_t_ref_consistency.csv` is written before
 the error is raised.
+
+### Constants
+
+-   `HPARAM_POLICIES = ('global', 'per_fold')`,
+    `DEFAULT_HPARAM_POLICY = 'global'`: the `hparam_policy` values and the
+    default (from `evaluation.runner.HPARAM_POLICY_*`).
+-   `DEFAULT_THRESHOLD_ROI = 1.0`: default of `opt_threshold_roi`.
+-   `PARALLEL_BACKEND_ENV = "DOUBLEML_JOBLIB_BACKEND"`,
+    `DEFAULT_PARALLEL_BACKEND = "loky"`: the environment variable that selects
+    the joblib backend of the parallel sections and its default.
+
+### Function: `resolve_n_cores`
+
+#### `resolve_n_cores(n_jobs) -> int`
+
+`n_cores` of the parallel plan `(W, h)`: `os.cpu_count()` for `-1`, `None`
+or `0`; a positive `n_jobs` as is; joblib's `n_jobs < -1` ("all but
+`-n_jobs - 1`") is honoured. Always `>= 1`.
+
+### Function: `compute_workers_threads`
+
+#### `compute_workers_threads(n_tasks, n_cores) -> (W, h)`
+
+`W = min(N_task, n_cores)` workers and `h = max(1, n_cores // W)` learner
+threads per worker (the formula of the NOTE above; `n_tasks` and `n_cores`
+are floored at 1).
+
+### Function: `parallel_section`
+
+#### `parallel_section(workers, threads)`
+
+The context manager of every parallel section:
+`joblib.parallel_config(backend='loky', n_jobs=W, inner_max_num_threads=h)`.
+When `DOUBLEML_JOBLIB_BACKEND` names another backend (e.g.
+`multiprocessing`), `h` is applied through `OMP_NUM_THREADS` & co. for the
+duration of the section instead.
+
+**Internal helpers exposed at module level.** The Phase 3 repetition
+reduction: `REP_RESULT_KEYS = ("model_name", "model_group", "metrics_1c",
+"cate_coef_dict")` (the keys every repetition `>= 1` must carry),
+`rep_df_columns(d_col, gt_col)` (the `df_1a` columns kept for those
+repetitions), `reduce_rep_result(res, d_col, gt_col)` (drops `model_obj` and
+the other columns before a worker result is sent back) and
+`regroup_phase3_results(candidate_names, rep0_results, jobs, flat_results)`
+(rebuilds the per-candidate result list, repetition 0 = the Phase 1 result
+first; `ValueError` on a missing Phase 1 result or a job / result mismatch).
 
 --------------------------------------------------------------------------------
 
@@ -681,6 +799,54 @@ agent refers to the runs by relative paths, so they can be moved together.
 
 -   `pathlib.Path`: The generated agent directory.
 
+**Raises:**
+
+-   `FileNotFoundError`: If a run has no `metadata.json`, or `skills_dir` does
+    not exist.
+-   `ValueError`: If `results_dirs` is empty; `output_dir` is omitted for
+    several runs; run names are not unique; a treatment appears in several
+    runs; `agent_name` is not a valid Python identifier; `model` is empty; no
+    `SKILL.md` is found under the skills directory; or `skills_dir` lies
+    inside the generated agent (which is replaced on generation).
+
+### Function: `schema_excerpt`
+
+Defined in `doubleml_pipeline.agent.generator` (not re-exported by the
+package).
+
+#### `schema_excerpt(sections=('consolidated_1a_full_df.csv', 'cate_coef_dict_pooling.csv'), schema_doc=OUTPUT_SCHEMA_DOC) -> str`
+
+Returns the `#### <file>` sections of `docs/output_csv_schema.md` named in
+`sections`, joined; an empty string when the document is missing from the
+installed package.
+
+### Function: `build_browser_system_instruction`
+
+Defined in `doubleml_pipeline.agent.generator` (not re-exported by the
+package).
+
+#### `build_browser_system_instruction(skills_dir=None) -> str`
+
+The system instruction of the in-browser `AI Assistant (Gemini)` tab of the
+HTML report: `INSTRUCTION`, followed by every `*.md` file under the skills
+directory (bundled skills by default), the `schema_excerpt()` and a "Browser
+Report Mode" block stating that the outputs of the `TOOL_NAMES` tools are
+precomputed in the embedded snapshot (`get_segment_profile` excepted).
+
+### Constants
+
+-   `DEFAULT_AGENT_MODEL = "gemini-3.8-flash"`,
+    `DEFAULT_AGENT_NAME = "causal_ml_insight_agent"`: defaults of
+    `generate_agent` / `Chat`.
+-   `AGENT_DESCRIPTION`: the agent's one-line description;
+    `AGENTS_DIRNAME = "agents"`; `BUNDLED_SKILLS_DIR` (the package's
+    `skills/` directory); `OUTPUT_SCHEMA_DOC` (the package's
+    `docs/output_csv_schema.md`).
+-   `TOOL_NAMES` (`agent.results_reader`): the six `CausalResultsReader`
+    methods exposed as tools, in prompt order: `get_analysis_overview`,
+    `get_treatment_effects`, `get_effects_by`, `get_segment_profile`,
+    `get_model_diagnostics`, `get_budget_optimization`.
+
 ### Class: `CausalResultsReader`
 
 #### `__init__(self, results)`
@@ -688,9 +854,11 @@ agent refers to the runs by relative paths, so they can be moved together.
 Reads `metadata.json` from `results` (the `output_dir` of a completed run, or a
 mapping from run name to `output_dir` for several runs) and exposes the analysis
 tools below. Tools route each treatment to the run that estimated it, and report
-runs side by side without adding effects across them. Each tool returns a JSON-serializable dict
-whose `status` is `"ok"`, `"unavailable"` (the run did not produce the required
-output) or `"invalid_argument"`.
+runs side by side without adding effects across them. Each tool returns a
+JSON-serializable dict whose `status` is `"ok"`, `"unavailable"` (the run did
+not produce the required
+output), `"invalid_argument"`, or `"error"` (any other exception; `reason`
+is `"<ExcType>: <msg>"`, so a tool failure never ends the agent's turn).
 
 #### `tools(self)`
 
@@ -698,9 +866,11 @@ Returns the bound tool methods, ready to pass to `google.adk.Agent(tools=...)`.
 
 #### `snapshot(self)`
 
-Returns a JSON-serializable dict of precomputed outputs across all
-`CausalResultsReader` tools (used by `generate_html_report` to power the
-serverless in-browser `AI Assistant (Gemini)` tab in `report.html`).
+Returns a JSON-serializable dict of precomputed outputs of every
+`CausalResultsReader` tool except `get_segment_profile` (free-form segment
+argument, not precomputed). Used by `generate_html_report` to power the
+serverless in-browser `AI Assistant (Gemini)` tab of the HTML report
+(`<treatment>_<outcome>[_<family>].html`).
 
 Tool                                                                  | Answers
 --------------------------------------------------------------------- | -------
@@ -708,12 +878,78 @@ Tool                                                                  | Answers
 `get_treatment_effects()`                                             | Incremental KPI with 95% interval, effect per unit, ROI on spend and outcome share per treatment, with the reliability signals `roi_vs_threshold` (`worth_investing` / `not_worth_investing` / `undetermined`), `low_sample` and `plausibility_flags`.
 `get_effects_by(by, treatment=None, cross_with=None, bins=4, within=None, start=None, end=None, sort_by='incremental_kpi', page=1, page_size=50)` | The effect broken down by a segment dimension (`geo`, `item`), a period (`week`, `month`, `quarter`, `year`, `month_of_year`, `day_of_week` for daily data) or any input column (quantile bins, optionally cut `within` each geo or item), optionally crossed with a second key into a 2-D table, restricted to a `start` / `end` date window and paged. Reports `data_period`, `window`, `threshold_summary`, `ci_separation`, `low_sample_groups`, `column_role`, `effect_drivers` and `heterogeneity_evidence`.
 `get_segment_profile(dimension, segment, treatment=None, columns=None)` | One geo or item in the input data before estimation: size, outcome share, treatment intensity and spend share, and its covariates against the overall mean. The check behind implausible or outlying estimates.
-`get_model_diagnostics(treatment=None)`                               | Stability across repetitions, sensitivity to unobserved confounding, and the fitted CATE specification with per-covariate evidence (`strong (p=...)`, `weak`, `none`).
+`get_model_diagnostics(treatment=None)`                               | Stability across repetitions, sensitivity to unobserved confounding, and the fitted CATE specification with per-covariate evidence (`strong (p=...)`, `weak (p=...)`, `none (p=...)`; `p<0.001` below 0.001).
 `get_budget_optimization(treatment=None, dimension='total', granularity='month', top_n=10)` | Optimized allocation of a run made with `optimize=True` (simple or saturation-aware): spend, incremental KPI and ROI before and after, overall, per date period or for the geos / items with the largest spend changes, with assumptions and warnings.
 
-`generate_agent` copies `docs/output_csv_schema.md` into each bundled skill as
-`references/output_csv_schema.md`, so the agent can look up what any output
-file or column means.
+`generate_agent` copies `docs/output_csv_schema.md` into each copied skill
+(bundled or from a user `skills_dir`) as `references/output_csv_schema.md`,
+so the agent can look up what any output file or column means (skipped when
+the installed package ships without `docs/output_csv_schema.md`).
+
+### Class: `Chat`
+
+Exported lazily from `doubleml_pipeline.agent` (together with `Turn` and
+`ask`; they import `google.adk`, which the pipeline itself does not need, so
+the import fails only when `google-adk` is missing). `Chat` runs the same
+agent that `generate_agent` writes to disk, in process on
+`google.adk.runners.InMemoryRunner`, so it works in Colab and Jupyter without
+`adk web`.
+
+#### `__init__(self, results, *, api_key=None, vertexai=None, model=DEFAULT_AGENT_MODEL, skills_dir=None)`
+
+**Parameters:**
+
+-   `results` *(str | os.PathLike | Mapping[str, PathLike])*: The
+    `output_dir` of a completed run, or a mapping from run name to
+    `output_dir` for several runs (treatment names must be unique).
+-   `api_key` *(Optional[str], default=None)*: Used regardless of the
+    environment when given (and mirrored into `GOOGLE_API_KEY` /
+    `GOOGLE_GENAI_USE_VERTEXAI`); otherwise the environment decides between
+    Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`) and `GOOGLE_API_KEY`.
+-   `vertexai` *(Optional[bool], default=None)*: Backend of an explicit key:
+    the Gemini API (AI Studio) by default, `True` for a Vertex AI express
+    mode key.
+-   `model` *(str, default=`DEFAULT_AGENT_MODEL`)*: Gemini model name.
+-   `skills_dir` *(Optional[PathLike], default=None)*: Skills to load;
+    defaults to the bundled skills.
+
+**Raises:**
+
+-   `ValueError`: Without `api_key` when the environment has neither
+    `GOOGLE_API_KEY` nor `GOOGLE_GENAI_USE_VERTEXAI=TRUE`.
+
+**Attributes:** `history` *(List[Turn])*, the turns of the conversation.
+
+#### `async ask(self, question) -> Turn`
+
+Sends `question` in the current conversation (a session is created on first
+use) and returns the `Turn`, which is also appended to `history`.
+
+#### `reset(self) -> None`
+
+Starts a new conversation; the agent forgets previous turns and `history` is
+cleared.
+
+#### `ui(self, placeholder='Ask about the causal estimates...')`
+
+Returns an ipywidgets chat widget (transcript, status line, prompt, `Send`
+and `New chat` buttons); each turn is rendered as Markdown. Raises
+`ImportError` without `ipywidgets` / `IPython`.
+
+### Class: `Turn`
+
+Frozen dataclass `Turn(question, answer, tool_calls)` — a question, the
+analyses the agent ran (`tool_calls`, a sequence of frozen
+`ToolCall(name, args)`) and its answer. `str(turn)` is the answer text;
+notebooks render it as Markdown (`_repr_markdown_`).
+
+### Function: `ask`
+
+#### `async ask(results, question, *, api_key=None, vertexai=None, **kwargs) -> Turn`
+
+Asks a single question about a run with no conversation history; equivalent
+to `await Chat(results, api_key=api_key, vertexai=vertexai,
+**kwargs).ask(question)`.
 
 ### Constant: `INSTRUCTION`
 
@@ -755,11 +991,35 @@ to prevent singularity bugs. **Parameters:**
 -   `population_col` *(str, default='population')*: Column specifying the
     population for normalization. Example: `'population'`.
 
+**Fitted attributes** (set by `fit`): `standard_params_`,
+`pop_standard_params_`, `pop_median_params_`, `min_max_params_`,
+`median_params_` *(Dict[str, Dict[str, float]], one entry per scaled
+column)* and, when a population-based scaling is configured,
+`raw_population_` *(pd.Series, the raw population column of the fitting
+frame)*.
+
+#### `fit(self, x: pd.DataFrame, y: Optional[Any] = None) -> 'CausalDataScaler'`
+
+Computes the scaling parameters from `x` and returns `self`.
+
+**Raises:**
+
+-   `ValueError`: If `population_col` is needed (a population-based list is
+    non-empty) but absent from `x`, or if any column named in one of the
+    scaling lists is not in `x.columns`.
+
+#### `transform(self, x: pd.DataFrame, y: Optional[Any] = None) -> pd.DataFrame`
+
+Returns a scaled **copy** of `x` using the fitted parameters (the helper
+column `_raw_population_` is added during the transform and dropped before
+the frame is returned). Min-max scaling of a constant column yields `0.0`.
+Raises `ValueError` if `population_col` is needed but absent from `x`.
+
 #### `fit_transform(self, x: pd.DataFrame, y: Optional[Any] = None) -> pd.DataFrame`
 
 Fits the scaling parameters and returns a normalized copy of the DataFrame
-(`self.fit(x, y).transform(x, y)`). Preserves a hidden raw population column
-for accurate descaling.
+(`self.fit(x, y).transform(x, y)`). The raw population is kept on the scaler
+as `raw_population_` for accurate descaling of population-scaled columns.
 
 **Parameters:**
 
@@ -782,6 +1042,13 @@ unscaled columns.
 -   `is_difference` *(bool, default=False)*: `True` when the column is a
     difference between two values, in which case only the scale is applied
     and the mean / minimum shift is not.
+
+**Raises:**
+
+-   `ValueError`: If the source column is population-scaled
+    (`population_standardize` / `population_median_normalize`) and
+    `population_col` is absent from `df_norm`, or the scaler holds no
+    `raw_population_`.
 
 --------------------------------------------------------------------------------
 
@@ -817,11 +1084,14 @@ earlier (NaN when that date is absent).
 
 **Returns:**
 
--   `pd.DataFrame`: A new dataframe with the lagged columns added.
+-   `pd.DataFrame`: A new dataframe with the lagged columns added. The copy is
+    re-sorted by `(unit_col…, date_col)`. When no positive date step exists
+    the period length falls back to 1 day.
 
 **Raises:**
 
--   `ValueError`: If `date_col` is empty or not a column of `df`.
+-   `ValueError`: If `date_col` is empty or not a column of `df`, or if a
+    `unit_col` entry is not a column of `df`.
 -   `KeyError`: If one of `columns` is not a column of `df`.
 
 ### Function: `create_amount_from_pct`
@@ -870,7 +1140,10 @@ Initializes the DoubleML PLR pipeline. **Parameters:**
 -   `time_budget` *(int, default=15)*: FLAML search budget in seconds of the
     `per_fold` searches. Example: `15`.
 -   `cate_structure` *(Union[str, Dict[str, Any]], default='auto_additive')*:
-    CATE functional form specifications. Example: `'auto_additive'`.
+    CATE functional form specification: `'auto_additive'`, a patsy formula
+    (any other string), or a dict `{'type', 'df', 'degree',
+    'include_intercept'}` with defaults `'auto_additive'` / `3` / `2` /
+    `False` (see `resolve_cate_structure`). Example: `'auto_additive'`.
 -   `covariates_for_cate` *(Optional[List[str]], default=None)*: Covariates used
     for CATE estimation. Example: `['geo_region']`.
 -   `ground_truth_col` *(Optional[str], default=None)*: Column name for ground
@@ -878,10 +1151,13 @@ Initializes the DoubleML PLR pipeline. **Parameters:**
 -   `cluster_cols` *(Optional[List[str]], default=None)*: Column names used for
     cluster robust inference. Example: `['geo_region']`.
 -   `random_state` *(Optional[int], default=None)*: Seed of the run (sample
-    splitting, FLAML, fixed fits). Example: `1`.
+    splitting, FLAML, fixed fits). With `None`, numpy is seeded with `rep_id`
+    and FLAML is left unseeded. Example: `1`.
 -   `n_jobs` *(Optional[int], default=None)*: Threads per learner fit (`h`
-    of the parallel plan), passed to FLAML and to `FixedHparamRegressor`;
-    `None` leaves the library defaults. Example: `4`.
+    of the parallel plan), passed to FLAML and to `FixedHparamRegressor`.
+    `None` leaves the library default on the FLAML (`per_fold`) path; under
+    `global`, `make_regressor(n_jobs=None)` reuses the `n_jobs` of the
+    search. Example: `4`.
 -   `early_stop` *(Optional[bool], default=True)*: FLAML `early_stop` of the
     `per_fold` searches; `None` = do not pass it. Example: `True`.
 -   `hparams_y` / `hparams_t` *(Optional[HparamSearchResult], default=None)*:
@@ -891,12 +1167,15 @@ Initializes the DoubleML PLR pipeline. **Parameters:**
     and no FLAML search runs inside the folds. Giving only one raises
     `ValueError`, as does a result searched on another target column.
 
+**Attributes:** `hparam_policy` *(str)*: `'global'` when both `hparams_y`
+and `hparams_t` were given, `'per_fold'` otherwise.
+
 #### `run(self, df_orig: pd.DataFrame, scaler: CausalDataScaler, rep_id: int = 1, df_score: Optional[pd.DataFrame] = None, row_order: Optional[pd.Index] = None, prepared: Optional[PreparedInputs] = None) -> Dict[str, Any]`
 
 Executes a single DoubleML Partial Linear Regression (PLR) pipeline run.
-**Returns:** A dictionary containing the model name, result dataframe (`df_1a`),
-execution metrics (`metrics_1c`), the DoubleML model object, and CATE
-coefficients.
+**Returns:** A dictionary with the keys `model_name`, `df_1a` (result
+dataframe), `metrics_1c` (execution metrics), `model_obj` (the DoubleML model
+object) and `cate_coef_dict` (CATE coefficients).
 
 **Parameters:**
 
@@ -919,7 +1198,8 @@ coefficients.
 -   `row_order` *(Optional[pd.Index], default=None)*: Row order of the returned
     `df_1a` (the original order of the full sample). The orchestrator
     aggregates repetitions positionally, so all repetitions must return the
-    same order.
+    same order. Applied only when `df_score` is given; without scored rows
+    it is ignored (the fitted rows keep the order of `df_orig`).
 -   `prepared` *(Optional[PreparedInputs], default=None)*: The scaled frames
     and the CATE basis of this treatment, computed once per treatment by
     `prepare_run_inputs` (`scaler` must be the instance fitted there) and
@@ -929,12 +1209,64 @@ coefficients.
 When `df_score` is given, `metrics_1c` additionally carries
 `number_of_fitted_rows` and `number_of_scored_rows`.
 
+**Raises:**
+
+-   `ValueError`: If `prepared.df_norm` does not match `df_orig` (rows /
+    index); under `global`, if an `HparamSearchResult` was searched on a
+    sample of a different size than `df_orig`; or if a `cluster_cols` entry
+    is missing from the scaled frame.
+-   `UserWarning`: When `len(df_orig) < 1000` and CATE covariates are given.
+
 ### Constants
 
 -   `ESTIMATION_SAMPLE_COL = 'estimation_sample'`: name of the column that
     marks fitted vs scored rows.
 -   `FITTED_SAMPLE_LABEL = 'D_inf'`, `SCORED_SAMPLE_LABEL = 'D_sel'`: its two
     values.
+-   `HPARAM_POLICY_GLOBAL = 'global'`, `HPARAM_POLICY_PER_FOLD = 'per_fold'`,
+    `HPARAM_POLICIES = ('global', 'per_fold')`: the hyperparameter policies
+    of Phases 1–3.
+
+### Class: `CateStructure`
+
+Frozen dataclass of the resolved `cate_structure` of one treatment:
+`cate_type` *(str)*, `cate_df`, `cate_degree`, `cate_intercept` (`'custom'`
+for the last three under a patsy formula).
+
+### Function: `resolve_cate_structure`
+
+#### `resolve_cate_structure(cate_structure) -> CateStructure`
+
+Resolves `'auto_additive'` (→ `(auto_additive, 3, 2, False)`), a patsy
+formula string (→ `(formula, 'custom', 'custom', 'custom')`) or a dict with
+`type` / `df` / `degree` / `include_intercept` (defaults `'auto_additive'` /
+`3` / `2` / `False`); `None` or `''` counts as `'auto_additive'`.
+
+### Class: `PreparedInputs`
+
+Dataclass of the per-treatment inputs of `run`, computed once and reused by
+every Phase 1 task and Phase 3 repetition: `df_norm` *(the scaled fitting
+frame)*, `df_norm_score` *(the scaled held-out rows, or `None`)*,
+`cate_basis` *(`p(X)` on the fitting rows)*, `cate_basis_score` *(the same
+design on the held-out rows, or `None`)*, `n_rows` *(`len(df_orig)`, the
+hand-over check of the global search sample)*.
+
+### Function: `prepare_run_inputs`
+
+#### `prepare_run_inputs(df_orig, scaler, df_score, covariates_for_cate, cate_structure) -> PreparedInputs`
+
+Fits `scaler` **in place** on `df_orig` (so `inverse_transform_column` sees
+the same fitted state), transforms `df_score` with the fitted parameters and
+builds the CATE basis pair with `build_cate_basis_pair`.
+
+### Function: `fold_validation_loss`
+
+#### `fold_validation_loss(fold_model) -> Optional[float]`
+
+The validation RMSE of one stored fold learner (`r_l` / `r_m`): the
+`internal_val_rmse_` of a `FixedHparamRegressor` under `global`, FLAML's
+`auto_ml_.best_loss` under `per_fold`; `None` when the learner exposes
+neither.
 
 ### Function: `build_cate_basis`
 
@@ -982,6 +1314,117 @@ scoring frame was given.
 
 --------------------------------------------------------------------------------
 
+## Module: `doubleml_pipeline.evaluation.hparam_search`
+
+The global FLAML hyperparameter search of `hparam_policy = "global"`. FLAML
+runs **once** per (treatment `d_col`, learner) at the start of Phase 1, on
+the sample Phases 1–3 are fitted on (the scaled frame), with features
+`x_cols` and the target `Y` for every element of `ml_models_y` (the `ml_l`
+side) and `D` — `fbar(T; alpha_hat)` when Phase 0 adopted a family, `T`
+otherwise — for every element of `ml_models_t` (the `ml_m` side). The
+winner's parameter dict `theta*` is persisted to
+`<output_dir>/step1_exploration_<d_col>/hparams_<d_col>_<learner>.json` and
+turned into the `FixedHparamRegressor` DoubleML receives as `ml_l` / `ml_m`.
+A learner listed on both sides is searched twice (once per target); the two
+results share one JSON file, keyed by side.
+
+### Constants
+
+-   `SIDE_Y = 'Y'`, `SIDE_T = 'T'`, `SIDES = ('Y', 'T')`: the two search
+    sides (`ml_l` / `ml_m`).
+-   `SEARCH_TASK = 'regression'`, `SEARCH_METRIC = 'rmse'`,
+    `SEARCH_EVAL_METHOD = 'auto'`, `SEARCH_EARLY_STOP = True`,
+    `SEARCH_SEED = 1`: the fixed FLAML arguments of the global search
+    (`max_iter` is never passed).
+-   `HPARAMS_JSON_TEMPLATE = 'hparams_{d_col}_{learner}.json'`,
+    `JSON_SCHEMA_VERSION = 1`: the JSON file name and its schema version.
+
+### Function: `hparams_json_name`
+
+#### `hparams_json_name(d_col, learner) -> str`
+
+`hparams_<d_col>_<learner>.json`.
+
+### Function: `class_path` / `resolve_class`
+
+#### `class_path(cls) -> str`
+
+#### `resolve_class(path) -> Any`
+
+`module.QualName` of a class (the JSON form of `estimator_cls`) and its
+inverse. `resolve_class` raises `ImportError` when the module cannot be
+imported and `AttributeError` when the class is not found.
+
+### Class: `HparamSearchResult`
+
+Dataclass holding the outcome of one global search (one (treatment, side,
+learner)).
+
+**Attributes:** `d_col`, `side` (`'Y'` | `'T'`), `learner` (FLAML estimator
+name), `target_col` (the column regressed on), `estimator_cls` (the winner's
+concrete class), `params` (`theta*`, the winner's `get_params()`),
+`best_loss` (`automl.best_loss`), `n_trials`, `n_iterations`,
+`elapsed_seconds`, `eval_method` (`'cv'` | `'holdout'` as FLAML decided),
+`n_rows`, `n_features`, `time_budget`, `seed`, `n_jobs`,
+`flaml_estimator_class` (default `''`).
+
+#### `val_method` *(property)* `-> str`
+
+`'holdout'` when `eval_method` is `holdout`, `'cv'` otherwise.
+
+#### `make_regressor(self, n_jobs=None, random_state=None) -> FixedHparamRegressor`
+
+An unfitted `FixedHparamRegressor(estimator_cls, theta*, n_jobs,
+random_state, val_method)`; `n_jobs=None` reuses the search's own `n_jobs`.
+
+#### `to_json_dict(self) -> Dict[str, Any]`
+
+#### `from_json_dict(data) -> HparamSearchResult` *(classmethod)*
+
+The JSON form (`estimator_cls` as a class path, numpy values converted) and
+its inverse (resolving the class).
+
+### Function: `search_hyperparameters`
+
+#### `search_hyperparameters(x, y, learner, time_budget, n_jobs, seed=SEARCH_SEED, verbose=0) -> Dict[str, Any]`
+
+One FLAML search with the fixed arguments above. Returns
+`{'estimator_cls', 'params', 'best_loss', 'n_trials', 'n_iterations',
+'elapsed_seconds', 'eval_method', 'flaml_estimator_class'}`; `params` omits
+`fixed_hparam_regressor.DROPPED_PARAM_KEYS`. Emits a `UserWarning` and
+assumes `'cv'` when FLAML does not expose its `eval_method`.
+
+### Function: `run_search`
+
+#### `run_search(d_col, side, learner, target_col, x, y, time_budget, n_jobs, seed=SEARCH_SEED) -> HparamSearchResult`
+
+Runs `search_hyperparameters` and packages the result. Raises `ValueError`
+on an unknown `side`.
+
+### Function: `write_hparams_json`
+
+#### `write_hparams_json(path, results, context=None) -> str`
+
+Persists the results of **one** (treatment, learner) as
+`{'schema_version', 'hparam_policy': 'global', 'd_col', 'learner',
+'context', 'sides': {side: result}}` (parent directories are created) and
+returns `path`. `context` holds traceability fields (`selected_family`,
+`alpha_hat`, `T_ref`, `final_fit`, sample size, …).
+
+### Function: `read_hparams_json`
+
+#### `read_hparams_json(path) -> Dict[str, HparamSearchResult]`
+
+Reads a file written by `write_hparams_json` into `{side: result}`.
+
+### Function: `group_by_learner`
+
+#### `group_by_learner(results) -> Dict[str, List[HparamSearchResult]]`
+
+Groups results by learner name (one JSON file per learner).
+
+--------------------------------------------------------------------------------
+
 ## Module: `doubleml_pipeline.evaluation.selection`
 
 ### Function: `shortlist_top_models`
@@ -1002,7 +1445,12 @@ RMSE.
 
 **Returns:**
 
--   `pd.DataFrame`: Sorted DataFrame with a `shortlisted` indicator column.
+-   `pd.DataFrame`: A sorted copy (ascending `combined_error`) that gains the
+    `norm_Y_rmse`, `norm_T_rmse` and `combined_error` columns of
+    `metrics.compute_nuisance_combined_error` plus a `shortlisted` indicator
+    (`1` for the first `top_n` rows, `0` otherwise). An empty `df_metrics` is
+    returned unchanged (no `shortlisted` column). The input frame is not
+    mutated.
 
 --------------------------------------------------------------------------------
 
@@ -1034,6 +1482,7 @@ $m=|\hat\theta|-t^*_\alpha\widehat{se}$; if $m\le0$ both values are 0,
 otherwise $f_q=m/\texttt{scale}$ and $RV=\tfrac12(\sqrt{f_q^4+4f_q^2}-f_q^2)$,
 the solution of $\texttt{scale}\sqrt{RV^2/(1-RV)}=m$ (the RV lies on the zero
 contour). Example: `robustness_value(3.0, 1.0, 31.62)` → `(0.0324, 0.0329)`.
+Raises `ValueError` unless `se` and `scale` are strictly positive and finite.
 
 ### Function: `bias_bound`
 
@@ -1048,14 +1497,18 @@ broadcast over array inputs.
 
 Reads `sigma2` / `nu2` from `dml_model.sensitivity_elements` (shape
 `(1, n_rep, n_coefs)`; median over repetitions). A component is `None` when
-unavailable.
+unavailable, or when its median is not finite or `<= 0`.
 
 ### Function: `residuals`
 
 #### `residuals(dml_model, i_treat=0) -> (u, v)`
 
 Out-of-fold residuals $u=Y-\hat\ell$, $v=D-\hat m$ from `dml_model.predictions`
-and `dml_model.nuisance_targets` (shape `(n_obs, n_rep)` each).
+and `dml_model.nuisance_targets` (shape `(n_obs, n_rep)` each). When the
+targets are missing (older DoubleML versions) they are taken from
+`dml_model._dml_data.y` / `.d`, broadcast over the repetitions. Raises
+`ValueError` when `predictions` has no `ml_l` / `ml_m` entries or no target
+source exists.
 
 ### Function: `residual_scale`
 
@@ -1063,7 +1516,9 @@ and `dml_model.nuisance_targets` (shape `(n_obs, n_rep)` each).
 
 $\sigma^2=\mathrm{mean}[(u-\theta v)^2]$, $\nu^2=1/\mathrm{mean}[v^2]$ over the
 rows selected by `mask` (all rows when `None`; median over repetitions) and
-$\texttt{scale}=\sqrt{\sigma^2\nu^2}$.
+$\texttt{scale}=\sqrt{\sigma^2\nu^2}$. Raises `ValueError` when the mask
+length differs from the residuals, no row is selected, or $\sigma^2$ /
+$\mathrm{mean}[v^2]$ is not positive and finite.
 
 ### Function: `sensitivity_stats`
 
@@ -1076,7 +1531,8 @@ unavailable). A GATE row passes the group's $\hat\theta_g$, $\widehat{se}_g$
 and `group_mask`; its $\sigma^2_g$, $\nu^2_g$ are the group's own residual
 moments. `SensitivityStats.as_record()` returns the `theta`, `se`,
 `robustness_value`, `n_obs`, `f_q`, `sigma2`, `nu2`, `scale` fields of
-`sensitivity_metrics.csv`.
+`sensitivity_metrics.csv`. Raises `ValueError` when `override_theta` /
+`override_se` is given without `group_mask`.
 
 ### Class: `SensitivityStats`
 
@@ -1138,7 +1594,13 @@ denominator is `0`). For the whole sample the values coincide with
 #### `perform_gate_and_sensitivity_analysis(dml_model, df_orig, gate_cols, benchmark_covariates=None)`
 
 Performs GATE (Group Average Treatment Effect) and robust sensitivity bounds
-checks.
+checks: one-hot encodes the groups formed by `gate_cols` (`pd.get_dummies`
+of the concatenated values), calls `dml_model.gate(groups=...)`, runs
+`dml_model.sensitivity_analysis(cf_y=0.03, cf_d=0.03, rho=1.0, level=0.95,
+null_hypothesis=0.0)` (this **mutates** the model) and
+`dml_model.sensitivity_benchmark(benchmarking_set=[cov])` per benchmark
+covariate (a failing benchmark is recorded with an `error` entry instead of
+raising).
 
 **Parameters:**
 
@@ -1151,8 +1613,10 @@ checks.
 
 **Returns:**
 
--   `Dict[str, Any]`: Dictionary containing the GATE summary, sensitivity
-    elements, benchmark results, and groups dataframe.
+-   `Dict[str, Any]`: `gate_summary` (the GATE summary table),
+    `sensitivity_elements` (`dml_model.sensitivity_elements`), `benchmarks`
+    (`{covariate: {'x': cf_d, 'y': cf_y}}`) and `groups_df` (the one-hot group
+    frame).
 
 --------------------------------------------------------------------------------
 
@@ -1190,7 +1654,10 @@ R-squared, MAE, and RMSE.
 **Returns:**
 
 -   `Dict[str, float]`: Dictionary containing `true_total_roi`, `SMAPE`,
-    `R_squared`, `MAE`, and `RMSE`.
+    `R_squared`, `MAE`, and `RMSE`. Every value is NaN when `y_true` is
+    `None` or empty; `true_total_roi` is `0` when `total_input <= 0`;
+    `R_squared` is NaN with fewer than two rows or a zero variance of
+    `y_true`.
 
 ### Function: `evaluate_nuisance_residuals`
 
@@ -1210,7 +1677,10 @@ skewness, and normality.
 
 -   `Dict[str, float]`: Dictionary containing residual properties
     (`residual_mean`, `residual_skewness`, `variance_ratio`,
-    `normaltest_pvalue`, `max_correlation`).
+    `normaltest_pvalue`, `max_correlation`). `variance_ratio` is NaN when the
+    treatment variance is `0`; `normaltest_pvalue` is NaN with fewer than 8
+    non-NaN residuals; `max_correlation` is the maximum **absolute**
+    correlation with the covariates (NaN without covariates).
 
 ### Function: `aggregate_geo_item_metrics`
 
@@ -1232,7 +1702,14 @@ dimensions.
 
 **Returns:**
 
--   `pd.DataFrame`: Aggregated metrics DataFrame.
+-   `pd.DataFrame`: One row per group of the present dimension columns
+    (`geo_col`, `geo_name_col`, `item_col`, `item_name_col`), with `model`
+    first, the group columns, `total_input`,
+    `total_estimated_incremental_KPI`, `total_sales`, `total_estimated_roi`
+    and the ground-truth metrics `true_total_roi`, `SMAPE`, `R_squared`,
+    `MAE`, `RMSE` (NaN without `gt_col`). When none of the dimension columns
+    exists, `df` is **mutated in place** (`df['geo'] = 'all'`) and a single
+    `geo = 'all'` row is returned.
 
 ### Function: `compute_nuisance_combined_error`
 
@@ -1325,7 +1802,7 @@ confidence bounds.
 -   `title` *(str)*: Plot title.
 -   `gt_col` *(Optional[str], default=None)*: Ground truth KPI column name.
 -   `actual_y_col` *(Optional[str], default=None)*: Actual total KPI column
-    name.
+    name; only used to annotate the title.
 
 ### Function: `plot_entity_roi_comparison`
 
@@ -1346,7 +1823,7 @@ performance, and ROI across specific entities (e.g., Geo locations or Items).
 -   `title` *(str)*: Plot title.
 -   `gt_col` *(Optional[str], default=None)*: Ground truth KPI column name.
 -   `actual_y_col` *(Optional[str], default=None)*: Actual total KPI column
-    name.
+    name; only used to annotate the title.
 
 ### Function: `plot_sensitivity_contour`
 
@@ -1363,7 +1840,8 @@ and the residual-based $\texttt{scale}=\sqrt{\sigma^2\nu^2}$
 (`dml_model.sensitivity_elements`, recomputed from the out-of-fold residuals
 when unavailable); the RV is `sensitivity.robustness_value(theta, se,
 scale)` and lies on the zero contour; the grid limit
-$\max(0.1,\,1.5\,RV,\,1.1\,\mathrm{bench})$ uses it. A GATE override uses the
+$\min(0.99,\,\max(0.1,\,1.5\,RV,\,1.1\,\mathrm{bench}))$ uses it. A GATE
+override uses the
 group's $\hat\theta_g$, $\widehat{se}_g$, $n_g$ and the group's own moments
 over `group_mask` ($\widehat{se}\sqrt n$ is never used as the scale).
 
@@ -1439,10 +1917,14 @@ no blank space is left at the right of the png — and the legend is expanded to
 the measured width of the text boxes, so the three boxes share the same left
 and right edges. Every line of the column (legend labels, treatment headers,
 equations, covariate names of the stats table) is wrapped to the box width and
-the table numbers are formatted to at most 10 characters (scientific notation
-beyond `±9999.999`), so no text can run beyond the grey boxes. The monospace
-font starts at 22 pt and is only shrunk when the three boxes would not fit the
-figure height. The cell fonts are 26 pt (titles) / 24 pt (axis labels) / 20 pt
+the table numbers are formatted to at most 10 characters (`{v:.3f}` while
+that fits in 10 characters, otherwise `{v:.3e}` truncated to 10 — i.e.
+scientific notation from `1e6` upwards and from `-1e5` downwards), so no
+text can run beyond the grey boxes. The monospace
+font starts at 22 pt and is only shrunk (never below 9 pt) when the three
+boxes would not fit the figure height; if they still do not fit at 9 pt the
+figure grows taller instead. The cell fonts are 26 pt (titles) / 24 pt
+(axis labels) / 20 pt
 (ticks); titles, axis labels and the colorbar label are wrapped to the measured
 cell size (breaking after underscores or spaces) and the margins between and
 around the cells grow with the number of wrapped lines, so long treatment or
@@ -1479,8 +1961,10 @@ group's rows respond inside it. Groups with fewer than two rows carrying a
 slope get no band. The trailing "total" row reuses the treatment's curve with
 a single treatment and falls back to a per-group straight-line fit otherwise;
 every cell states the response used in a small note in its **upper-right
-corner** (`response: tanh saturation (alpha_hat = ..., T_ref = ... on T/c)` or
-`response: linear`), away from the origin where the curves start.
+corner** (`response: tanh saturation (alpha_hat = ..., T_ref = ... on T/c)`,
+`response: linear`, or `response: linear fit (sum of treatments)` in the
+total row of a multi-treatment run), away from the origin where the curves
+start.
 
 **Parameters:** as `plot_cate_scatter_matrix`, plus
 
@@ -1519,7 +2003,11 @@ step4_consolidated_results/roi_output/<treatment>/`), for the total, every
 geo and every item: `001_time_series_charts/`,
 `002_result_in_sale_periods/`, `003_roi_by_month/`, `004_roi_by_geo/` and,
 with `item_col`, `005_roi_by_item/`. The confidence-band columns
-`<est_col>_2.5%` / `<est_col>_97.5%` are used when present.
+`<est_col>_2.5%` / `<est_col>_97.5%` are used when present. The year × …
+matrices (`002`–`005`) cover only the last three calendar years of the data;
+`004` / `005` write one matrix for all months plus one per calendar month
+(`total_roi_by_geo_matrix.png`, `month_<m>_roi_by_geo_matrix.png`, and the
+same with `item`), skipping months without data.
 
 **Parameters:**
 
@@ -1633,7 +2121,11 @@ the prefix of the identification diagnostic it visualizes (`diag1_` … `diag6_`
 `others_` when no rule is attached; the names live in
 `doubleml_pipeline.utils.io`. Every function takes the
 `AlphaSelectionResult` (duck-typed, so there is no import cycle) and a
-destination path, and returns the path. Only matplotlib and numpy are used.
+destination path, and returns the path (`plot_split_coverage` takes the
+coverage frame first: `plot_split_coverage(coverage, path, result=None)`).
+Besides matplotlib and numpy the figures use pandas,
+`models.saturation` (`apply_saturation`, `BOUNDED_FAMILIES`, …) and the
+file names of `utils.io`.
 **Every figure ends with a footnote** that explains its annotations, states the
 rule / status of the diagnostic for this run and names the CSV columns / JSON
 keys it corresponds to. The grid construction and the per-seed alpha
@@ -1643,7 +2135,7 @@ distribution are panels of `summary_alpha_profile_<treatment>.png`
 | Function | File | Content |
 | :--- | :--- | :--- |
 | `plot_basis_approx_error(result, path)` | `diag1_basis_approx_error.png` | Diag1: `eps(J)(alpha)`, the relative RMS error of the `J`-term T-basis approximation of `fbar(.; alpha)`, per grid point against `basis_tol`, with `A_1SE` shaded and `alpha_hat` marked; the title states `J`, `max eps(J)` and whether Diag1 fired. |
-| `plot_rloss_profile(result, path)` | `diag2_rloss_profile.png` | `L_bar(alpha)` with a ±1 se band (`se(alpha)` of Diag2, paired against `alpha_hat`), `L_bar_ATE(alpha)` (dotted; visualization only, no argmin marker), and the identity candidate `L_bar_T` as a horizontal line with a ±k·se band. Every grid point of `A_1SE` is shaded (contiguity is not required) and `alpha_hat` is marked. The x-axis is `T_1/2` (log; `T_knee` for log). The title carries `decision` and `decision_reason`; the footnote states the Diag2 statistic, threshold and outcome. |
+| `plot_rloss_profile(result, path)` | `diag2_rloss_profile.png` | `L_bar(alpha)` with a ±1 se band (`se(alpha)` of Diag2, paired against `alpha_hat`), `L_bar_ATE(alpha)` (dotted; visualization only, no argmin marker), and the identity candidate `L_bar_T` as a horizontal line with a ±k·se band. Every grid point of `A_1SE` is shaded (contiguity is not required) and `alpha_hat` is marked. The x-axis is `T_1/2` (log; `T_knee` for log) and `alpha` (linear) for `power`. The title carries `decision` and `decision_reason`; the footnote states the Diag2 statistic, threshold and outcome. |
 | `plot_f_transform_quantiles(result, path)` | `diag4_f_transform_quantiles.png` | The four shape quantiles `phi_p(alpha) = fbar(q_p(T>0); alpha)`, `p in {25, 50, 75, 90}` (Diag4), over alpha, with horizontal lines at the linear references `q_p / T_ref` and at `fbar(T_ref) = 1`, and `alpha_hat` marked. |
 | `plot_saturation_at_t_ref(result, path)` | `diag5_saturation_at_T_ref.png` | Diag5 (`tanh` / `exp` only): `kappa(alpha) = f(T_ref; alpha)`, the share of the ceiling reached at `T_ref`, over the grid with `A_1SE` shaded and `kappa(alpha_hat)` marked. Not written for `log` / `power` (no ceiling). |
 | `plot_split_coverage(coverage, path, result=None)` | `others_split_coverage.png` | Per adopted key: horizontal bars of `n_cells_sel` / `n_cells_inf` per level (the columns of `others_split_coverage.csv`); levels that violate the coverage guarantee are printed in red. The footnote documents the columns of `others_split_coverage.csv` and `others_split_coverage_detail.csv`. A text-only figure is written when the split was not cell-level. |
@@ -1667,7 +2159,52 @@ The five figure writers of the table: `result` is the `AlphaSelectionResult`,
 Writes all figures into `out_dir` (`diag5_*` only for the bounded families).
 `coverage` is the `others_split_coverage.csv` frame used by
 `others_split_coverage.png`. A figure that fails never aborts Phase 0; its
-entry in the returned `file name -> path` mapping is `None`.
+entry in the returned `file name -> path` mapping is `None` (only
+`ValueError`, `TypeError`, `RuntimeError`, `FloatingPointError`, `KeyError`
+and `IndexError` are caught; the failure is printed).
+
+--------------------------------------------------------------------------------
+
+## Module: `doubleml_pipeline.visualization.html_extraction`
+
+Builds the self-contained interactive HTML report of a run from the files
+under `output_dir` (every chart is embedded as a base64 data URI, so the file
+can be shared on its own).
+
+### Function: `generate_html_report`
+
+#### `generate_html_report(output_dir: str) -> str | None`
+
+Reads `<output_dir>/metadata.json` (returns `None` after printing a message
+when it is missing) and embeds every `.png` under
+`step4_consolidated_results/graph/` and `step4_consolidated_results/roi_output/`
+as base64. It reads the consolidated CSVs
+(`consolidated_1a_full_df.csv`, `consolidated_3b_summary.csv`,
+`consolidated_3b_summary_geo.csv`, `consolidated_3b_summary_item.csv`), the
+prior parameters, the optimization metrics and yearly summary (of
+`graph/007_optimization/` and, per non-`spend` treatment,
+`roi_output/<treatment>/007_optimization/`), and for a saturation run
+`step0_saturation[/<treatment>]/summary_alpha_selection.json` together with
+the Phase 0 PNGs. The `AI Assistant` tab embeds
+`CausalResultsReader(output_dir).snapshot()` and
+`build_browser_system_instruction()`.
+
+**Tabs:** `000_saturation` (when `metadata["saturation_phase0"]` is
+non-empty), `001_total`, `002_geo`, `003_item`, `004_cate`, `005_prior`,
+`006_sensitivity`, `007_optimization` (when some treatment type is `spend`),
+`roi_output_001_time_series_charts (<t>)` … `roi_output_007_optimization
+(<t>)` per non-`spend` treatment, and `✨ AI Assistant (Gemini)`.
+
+**File name:** `<output_dir>/<treatment>_<outcome>[_<family>].html`. Every
+part is sanitized with `re.sub(r"[^0-9A-Za-z._-]+", "_", …).strip("._-")`,
+the treatments are joined with `-`, and the `_<family>` segment is appended
+only when `metadata["saturation_family"]` is truthy; `report.html` is the
+fallback when every part is empty.
+
+**Returns:**
+
+-   `str | None`: The path of the written report, or `None` when
+    `metadata.json` is missing.
 
 --------------------------------------------------------------------------------
 
@@ -1702,6 +2239,156 @@ evaluation method FLAML chose (`eval_method_`).
     do not pass it.
 -   `**kwargs` *(Any)*: Additional arguments passed to the FLAML AutoML
     constructor.
+
+#### `fit(self, X, y) -> FlamlRegressorDoubleML`
+
+Runs the FLAML search (`task="regression"`, `time_budget=time`,
+`estimator_list`, `metric`, `seed=random_state`, plus `early_stop` /
+`n_jobs` when not `None`) and sets the fitted attributes `auto_ml_` (the
+`flaml.AutoML`), `tuned_model_` (`auto_ml_.model.estimator`),
+`search_elapsed_seconds_`, `n_trials_` and `eval_method_`. Returns `self`.
+
+#### `predict(self, X)`
+
+Predicts with `tuned_model_` (raises scikit-learn's `NotFittedError` before
+`fit`).
+
+#### `get_params(self, deep=True) -> Dict[str, Any]`
+
+#### `set_params(self, **params) -> FlamlRegressorDoubleML`
+
+The seven constructor arguments plus `**kwargs`; `set_params` routes unknown
+names into the FLAML constructor kwargs.
+
+### Function: `flaml_eval_method`
+
+#### `flaml_eval_method(automl) -> Optional[str]`
+
+The evaluation method FLAML chose (`"cv"` | `"holdout"`, read from
+`automl._state.eval_method`), or `None` when it cannot be determined.
+
+### Function: `flaml_n_trials`
+
+#### `flaml_n_trials(automl) -> Optional[int]`
+
+`len(automl.config_history)`, the number of FLAML trials, or `None` when
+unavailable.
+
+### Function: `fit_multioutput`
+
+#### `fit_multioutput(template, x_values, y_matrix) -> (estimator, native)`
+
+Fits a **clone** of `template` on an `(n, J)` target matrix: natively when
+the learner accepts a 2-D target and predicts `(n, J)`, otherwise through a
+per-output `sklearn.multioutput.MultiOutputRegressor` (`native=False`; the
+fit count then degrades from 1 to `J`). `template` is never mutated. Used by
+the legacy Phase 0 learner selection (`learner_selection=True`).
+
+### Class: `MultiOutputFlamlRegressor`
+
+#### `__init__(self, time, estimator_list, metric, verbose=0, random_state=None, **kwargs)`
+
+Vector-valued FLAML regression of the treatment basis `E[b(T) | X]` for the
+legacy learner selection: `fit(X, y)` runs **one** AutoML search against a
+scalar surrogate (the first principal component of the standardized basis
+targets) and refits the winner on the full `(n, J)` matrix through
+`fit_multioutput` (attributes `auto_ml_`, `template_`, `estimator_`,
+`native_multioutput_`, `n_outputs_`); `predict(X)` always returns an
+`(n, J)` array.
+
+--------------------------------------------------------------------------------
+
+## Module: `doubleml_pipeline.models.fixed_hparam_regressor`
+
+The nuisance learner with **fixed** hyperparameters of
+`hparam_policy = "global"`: FLAML runs once per (treatment, learner)
+(`evaluation.hparam_search`) and every fold of every Phase 1 / Phase 3
+cross-fitting fits the concrete estimator class with that fixed parameter
+dict `theta*`. `fit` also computes the quantity the combined error of
+Phase 2 / the best-group selection of Phase 3 is built on: the validation
+RMSE of `theta*` **inside the fold's training data**, with the method FLAML
+chose for the search (`cv` → `KFold(5, shuffle=True)`; `holdout` → one
+`train_test_split(test_size=0.1)`), stored as `internal_val_rmse_` and read
+by `evaluation.runner.fold_validation_loss` in place of FLAML's `best_loss`.
+
+### Constants
+
+-   `VAL_METHOD_CV = 'cv'`, `VAL_METHOD_HOLDOUT = 'holdout'`,
+    `VAL_METHODS = ('cv', 'holdout')`: the validation methods (they mirror
+    FLAML's `eval_method`).
+-   `OVERRIDDEN_PARAM_KEYS = ('n_jobs', 'random_state')`: keys of `theta*`
+    replaced by the constructor arguments (documents the intent; the
+    replacement itself is done by `build_estimator`).
+-   `DROPPED_PARAM_KEYS = ('callbacks',)`: fit-time objects FLAML may leave
+    on the estimator, never passed to a fresh fit.
+
+### Function: `accepts_parameter`
+
+#### `accepts_parameter(estimator_cls, name) -> bool`
+
+Whether `estimator_cls(**{name: ...})` is a valid constructor call: the
+keyword is listed in `__init__`, or (for `**kwargs` constructors such as
+XGBoost) appears in `get_params()` of a default instance.
+
+### Function: `build_estimator`
+
+#### `build_estimator(estimator_cls, params, n_jobs=None, random_state=None)`
+
+An unfitted `estimator_cls(**params, n_jobs=n_jobs,
+random_state=random_state)`: `DROPPED_PARAM_KEYS` are removed, `n_jobs` /
+`random_state` in `params` are replaced by the arguments, and either is only
+passed when the class accepts it (`None` leaves the class default / the
+value in `params`).
+
+### Function: `internal_validation_rmse`
+
+#### `internal_validation_rmse(make_estimator, x, y, val_method='cv', n_splits=5, split_ratio=0.1, random_state=None) -> float`
+
+The validation RMSE of `theta*` inside one fold's training data: the mean
+RMSE over `KFold(n_splits, shuffle=True, random_state)` (`cv`; `n_splits` is
+reduced to `len(y)` when the data has fewer rows) or the RMSE on the held-out
+part of one `train_test_split(test_size=split_ratio)` (`holdout`). `NaN`
+with fewer than two rows. Raises `ValueError` on an unknown `val_method`.
+
+### Class: `FixedHparamRegressor`
+
+#### `__init__(self, estimator_cls, params, n_jobs=1, random_state=None, val_method='cv', val_n_splits=5, val_split_ratio=0.1)`
+
+scikit-learn compatible wrapper (`BaseEstimator`, `RegressorMixin`) that
+DoubleML receives as `ml_l` / `ml_m`; `sklearn.base.clone` (called per fold)
+recreates an unfitted copy from `get_params`.
+
+**Parameters:**
+
+-   `estimator_cls` *(type)*: Concrete estimator class of the FLAML winner
+    (`automl.model.estimator.__class__`).
+-   `params` *(Dict[str, Any])*: `theta*`
+    (`automl.model.estimator.get_params()`).
+-   `n_jobs` *(int, default=1)*: Threads per fit (`h` of the parallel plan).
+-   `random_state` *(Optional[int], default=None)*: Seed of the fits and of
+    the validation split.
+-   `val_method` *(str, default='cv')*: `'cv'` | `'holdout'`, the
+    `eval_method` FLAML chose for this learner in the global search.
+-   `val_n_splits` *(int, default=5)*, `val_split_ratio` *(float,
+    default=0.1)*: `KFold` splits under `cv`, held-out share under `holdout`.
+
+#### `fit(self, X, y) -> FixedHparamRegressor`
+
+Computes `internal_val_rmse_` with `internal_validation_rmse`, then fits a
+fresh `build_estimator(...)` on all rows (`model_`); also sets
+`n_features_in_`. Returns `self`.
+
+#### `predict(self, X) -> np.ndarray`
+
+Predicts with `model_` (1-D float array); raises scikit-learn's
+`NotFittedError` before `fit`.
+
+#### `get_params(self, deep=True) -> Dict[str, Any]`
+
+#### `set_params(self, **params) -> FixedHparamRegressor`
+
+The seven constructor arguments; `set_params` raises `ValueError` for an
+unknown name.
 
 --------------------------------------------------------------------------------
 
@@ -1741,7 +2428,8 @@ flowchart TD
 
 Modules: `C`, `D`, `E`, `E4`, `E5`, `D6` are in `evaluation.alpha_selection`
 (`D6` is called by `workflow._apply_saturation_transform`); `E1` is in
-`models.saturation` (Stage B learners section); `E2`, `E3`, `K1`, `K2` are in `models.saturation`;
+`models.saturation` (Stage B learners section); `E2`, `E3`, `K1`, `K2` are in
+`models.saturation`;
 `W` is in `evaluation.saturation_evaluation` / `visualization.plots`; `J`,
 `J0` and `K` are in `optimization`.
 
@@ -1752,18 +2440,33 @@ Modules: `C`, `D`, `E`, `E4`, `E5`, `D6` are in `evaluation.alpha_selection`
 -   `DEFAULT_FAMILY` *(str)*: `'tanh'`, used when the `saturation` block omits
     `family`.
 -   `HALF_SATURATION_FAMILIES` *(Tuple[str, ...])*: `('tanh', 'exp', 'log')`,
-    the families that have a half-saturation point.
+    the families whose alpha grid is laid out in the half-saturation point
+    (`T_knee` for `log`).
 -   `BOUNDED_FAMILIES` *(Tuple[str, ...])*: `('tanh', 'exp')`, the families
     with `f -> 1` as `T -> inf`.
 -   `POWER_GRID_BOUNDS` *(Tuple[float, float])*: `(0.1, 0.95)`, the linear
     alpha grid used for `power` in `auto` mode.
+-   `GRID_VARIABLE` *(Dict[str, str])*: `{'tanh': 'T_1/2', 'exp': 'T_1/2',
+    'log': 'T_knee', 'power': 'alpha'}`, the variable each family's grid is
+    laid out in (see `grid_variable`).
+-   `BASIS_PROJECTION_GRID = 500`: number of equally spaced points over
+    `[0, T_max]` in the projection grid of `TreatmentBasis`.
+-   `BASIS_QUANTILE_GRID = 201`: number of empirical quantiles of `T > 0`
+    added to the projection grid.
+-   `BASIS_T_MAX_QUANTILE = 0.999`: the quantile of `T > 0` that defines the
+    right end `T_max` of the basis domain (`basis_domain_max`).
+-   `MAX_BASIS_CONDITION = 1e8`: `cond(B)` of the projection-grid basis
+    matrix at or above which the coefficients `c(alpha)` are not trusted
+    (Diag1 fires and Stage B adopts the linear model,
+    `decision_reason = "basis_ill_conditioned"`).
 
 ### Function: `validate_family`
 
 #### `validate_family(family: Optional[str]) -> Optional[str]`
 
-Normalizes and validates a family name. Returns `None` for `None`, `'none'` or
-`''` (saturation off); raises `ValueError` for an unrecognized name. The
+Normalizes (strip, lower-case) and validates a family name. Returns `None`
+for `None`, `'none'`, `'null'`, `'linear'` or `''` (saturation off); raises
+`ValueError` for an unrecognized name. The
 `'tanh'` default for an omitted `family` key is applied by the orchestrator,
 not here.
 
@@ -1777,9 +2480,12 @@ for `'tanh'`, `'exp'` and `'log'`.
 
 ### Function: `clip_alpha`
 
-#### `clip_alpha(family: str, alpha: float) -> float`
+#### `clip_alpha(family: str, alpha: Union[float, np.ndarray]) -> Union[float, np.ndarray]`
 
-Clips `alpha` into the family's valid domain.
+Clips `alpha` into the family's valid domain: `[1e-3, 1 - 1e-3]` for
+`power`, `[1e-6, inf)` otherwise. A scalar in gives a `float` out; an array
+in gives an array of the same shape (the row-varying `alpha_i` of the
+normalization bridge).
 
 ### Function: `apply_saturation`
 
@@ -1830,6 +2536,18 @@ of `t_values` (so the zero mass of sporadic spend does not pull it to 0).
 Raises `ValueError` if `quantile` is outside `(0, 1]` or no positive value
 exists.
 
+### Function: `basis_domain_max`
+
+#### `basis_domain_max(t_values, quantile=BASIS_T_MAX_QUANTILE) -> float`
+
+Returns the right end `T_max = q(T | T > 0)` of the T-basis domain
+`[0, T_max]` at `BASIS_T_MAX_QUANTILE` (0.999) — the counterpart of
+`reference_point` for the domain, computed once on the full data before the
+split and passed to Stage B by the orchestrator. Observations above `T_max`
+are clipped to it when the basis is evaluated. When no strictly positive
+value exists the finite maximum is returned. Raises `ValueError` if
+`quantile` is outside `(0, 1]` or no finite value exists.
+
 ### Function: `normalized_saturation`
 
 #### `normalized_saturation(t_values, family, alpha, t_ref) -> np.ndarray`
@@ -1845,8 +2563,9 @@ Raises `ValueError` unless every `t_ref` is finite and strictly positive.
 #### `raw_scale_reference(t_ref, divisor) -> np.ndarray`
 
 The treatment normalization bridge for the reference point: Phase 0
-computes `T_ref` on `T / c`; since `fbar(T/c; alpha, T_ref) = fbar(T; alpha_raw, c T_ref)`
-exactly for every family (with `alpha_raw` from `rescale_alpha_to_raw` and
+computes `T_ref` on `T / c`; since
+`fbar(T/c; alpha, T_ref) = fbar(T; alpha_raw, c T_ref)` exactly for every
+family (with `alpha_raw` from `rescale_alpha_to_raw` and
 **unit gain**), the raw-unit reference point is `c * T_ref` (row-varying when
 `c` is). Phase 4 uses it together with `alpha_raw`; the `gain` of
 `rescale_alpha_to_raw` is not needed any more.
@@ -1907,7 +2626,8 @@ Inverse of `half_saturation_point` (identity for
 #### `build_alpha_grid(grid_cfg: Dict[str, Any], family: str) -> np.ndarray`
 
 Builds the **manual** (legacy) alpha grid from the `saturation['grid']` config
-block (`min`, `max`, `num`, `scale`), in alpha units. It only backs
+block (`min`, `max`, `num` (default `25`), `scale` (default `'log'`)), in
+alpha units. It only backs
 `grid.mode: 'manual'`; the default grid comes from
 `build_half_saturation_grid`.
 
@@ -1915,7 +2635,8 @@ User-supplied bounds are **validated, not clipped** — bounds outside the famil
 defaults are accepted (and are necessary for large-scale treatments; see the
 `saturation` config examples). Raises `ValueError` if `num < 2`, if
 `min >= max`, if `min <= 0` (the grid must stay bounded away from the parameter
-space boundary), or if `family='power'` and `max >= 1`.
+space boundary), if `family='power'` and `max >= 1`, or if `scale` is neither
+`'log'` nor `'linear'`. The values pass through `clip_alpha`.
 
 ### Function: `resolve_grid_mode`
 
@@ -1929,7 +2650,8 @@ resolves to `'manual'`. An invalid `mode` raises `ValueError`.
 
 Dataclass holding the alpha grid `G`.
 
-**Attributes:** `family` *(str)*, `mode` *(str)*, `coord_kind` *(str)*,
+**Attributes:** `family` *(str)*, `mode` *(str)*, `coord_kind` *(str;
+`'log_t_half'` \| `'alpha'` \| `'log_alpha'`)*,
 `coord` *(np.ndarray)*, `alphas` *(np.ndarray)*, `t_half` *(np.ndarray)*,
 `q50` / `q95` *(float)*, `c_min` / `c_max` *(float)*, `extensions` *(int)*,
 `extensible` *(bool)*.
@@ -1938,12 +2660,15 @@ Dataclass holding the alpha grid `G`.
 
 -   `log T_1/2` for the auto grid (tanh / exp; `log T_knee` for
     `log`);
--   `alpha` for `power` and for manual linear grids;
--   `log alpha` for manual log grids.
+-   `alpha` for `power` (auto and manual; a `power` grid is always linear in
+    alpha) and for manual linear grids;
+-   `log alpha` for manual log grids of tanh / exp / log.
 
-The Diag2 half-saturation spread is measured in this coordinate. **Methods:**
+The Diag2 half-saturation spread is measured in this coordinate.
+**Properties / methods:**
 
--   `width()`: the grid width in `coord`.
+-   `width` *(property)*: the grid width in `coord` (`0.0` with fewer than
+    two points).
 -   `alpha_at(coord_value)`: maps a `coord` value to alpha.
 -   `coord_of(alpha)`: maps alpha to `coord`.
 -   `linear_side` *(property)*: which **index** end of the grid is
@@ -1958,12 +2683,17 @@ The Diag2 half-saturation spread is measured in this coordinate. **Methods:**
 #### `build_half_saturation_grid(t_values, family, grid_cfg=None) -> AlphaGrid`
 
 Builds the default dimensionless grid:
-`G_T1/2 = logspace(c_min * q50(T>0), c_max * q95(T>0), num)`. Each point is
+`G_T1/2 = logspace(c_min * q50(T>0), c_max * q95(T>0), num)` (defaults
+`c_min=0.25`, `c_max=4.0`, `num=25`; when the upper end is not above the
+lower one, `hi = 16 * lo`). Each point is
 converted to alpha per family (tanh `ln3/T_1/2`, exp `ln2/T_1/2`;
 Log `alpha = T_knee`, the grid point itself).
-`power` uses `num` equally spaced alphas on `POWER_GRID_BOUNDS` and is not
-extensible. With `mode: 'manual'` it wraps `build_alpha_grid`; the result is
-not extensible, and `power` is always spaced linearly. `t_values` are on the
+In `auto` mode `power` uses `num` equally spaced alphas on
+`POWER_GRID_BOUNDS` and is not extensible. With `mode: 'manual'` it wraps
+`build_alpha_grid`: the result is not extensible and the alphas follow
+`scale` (default `'log'`) for tanh / exp / log, while a manual `power` grid
+is always linear in alpha (`scale` is validated — `'log'` or `'linear'` —
+but ignored, and `coord_kind` is `'alpha'`). `t_values` are on the
 scale Phase 0 works on (`T/c`). Raises `ValueError` if `num < 2`, or if the
 auto grid sees no strictly positive treatment value.
 
@@ -2000,8 +2730,12 @@ Phases 1–3 evaluate `fbar(T; alpha_hat)` directly (no basis), so
 
 The knot vector is explicit:
 
--   The domain is `[0, T_max]`, `T_max = max_{D_sel} T` (`t_min = 0`,
-    `t_max`).
+-   The domain is `[0, T_max]` (`t_min = 0`, `t_max`), with `T_max` the
+    `BASIS_T_MAX_QUANTILE` (0.999) quantile of `T > 0` — normally computed
+    once on the **full** data before the split by the orchestrator
+    (`basis_domain_max`) and passed in; `None` derives it from `t_values`
+    with the same rule. `transform` clips its input to `[0, T_max]`;
+    `n_above_t_max` counts the rows of `t_values` that are clipped.
 -   The `J - degree - 1` interior knots sit at equally spaced quantiles of
     `T > 0` in `D_sel` (quantiles including `T = 0` are not used, so the knots
     do not pile onto the mass at zero).
@@ -2011,20 +2745,26 @@ All `J` functions are kept (partition of unity), so the basis has exact
 **linear precision**: `T = sum_j xi_j b_j(T)`, with `xi_j` the Greville
 abscissae. The identity candidate of the 1-SE test relies on this.
 
-**Definition of `c(alpha)`.** On a fixed equally spaced grid `{t_g}`
-of `G = 500` points over `[0, T_max]` the basis-value matrix `B` (`G x J`,
-attribute `b_grid`) and the projector `P = (B'B)^-1 B'` (`J x G`, attribute
-`projector`; a pseudo-inverse is used if `B'B` is singular) are constants,
-independent of alpha and of `(Y, X)`, computed **once per basis** (hence once
-per seed / run). `c(alpha) = P fbar_alpha` with
+**Definition of `c(alpha)`.** On the fixed projection grid `{t_g}` — the
+deduplicated union of `max(n_grid, J + 1)` equally spaced points over
+`[0, T_max]` (`n_grid = BASIS_PROJECTION_GRID = 500`), `BASIS_QUANTILE_GRID
+= 201` empirical quantiles of `T > 0` (clipped to the domain) and the
+Greville abscissae — the basis-value matrix `B` (`G x J`, attribute
+`b_grid`) and the least-squares projector `P = B^+` (`J x G`, attribute
+`projector`; always `np.linalg.pinv(B, rcond=1e-10)`, the normal equations
+are never formed) are constants, independent of alpha and of `(Y, X)`,
+computed **once per basis** (hence once per seed / run). The condition
+number `cond(B)` is kept as `basis_cond` and `ill_conditioned` flags
+`cond(B) >= MAX_BASIS_CONDITION` (1e8). `c(alpha) = P fbar_alpha` with
 `fbar_alpha = (fbar(t_g; alpha))_g`. `c(alpha)` is **not** obtained by
 regressing on the observed `T_i`.
 
-#### `__init__(self, t_values, basis_dim=15, degree=3, t_ref=None, n_grid=500)`
+#### `__init__(self, t_values, basis_dim=15, degree=3, t_ref=None, n_grid=BASIS_PROJECTION_GRID, t_max=None)`
 
 -   `t_values` *(np.ndarray)*: Observed treatment values of `D_sel`; they
-    define `T_max` and the knot placement (and the support on which
-    `approximation_error` is measured).
+    define the knot placement, the quantile grid points and the support on
+    which `approximation_error` is measured (and `T_max` when `t_max` is
+    `None`). Raises `ValueError` when empty.
 -   `basis_dim` *(int, default=15)*: Requested number of basis functions `J`.
     Ties in `T` can merge inner knots; the realized `J` is `n_basis`. In the
     pipeline, `J` is chosen by `select_basis_dim`.
@@ -2032,15 +2772,23 @@ regressing on the observed `T_i`.
 -   `t_ref` *(float, optional)*: The reference point `T_ref` of
     `fbar`. The pipeline passes the value computed on the full data; `None`
     falls back to `q95(T > 0)` of `t_values`. The normalization is always on.
--   `n_grid` *(int, default=500)*: Size `G` of the fixed
-    projection grid (`t_grid`).
+    Must be finite and `> 0` (`ValueError` otherwise).
+-   `n_grid` *(int, default=500)*: Number of equally spaced points of the
+    projection grid; the quantile points and the Greville abscissae are added
+    on top, so the realized grid size is the attribute `n_grid`.
+-   `t_max` *(float, optional)*: The right end `T_max` of the domain
+    (normally `basis_domain_max` of the full data); `None` computes it from
+    `t_values`. A non-finite or non-positive value is widened to `1.0`.
 
-**Attributes:** `t_min`, `t_max`, `t_ref`, `inner_knots`, `knots`, `n_basis`,
-`t_grid` *(G,)*, `b_grid` *(G, J)*, `projector` *(J, G)*, `n_grid`.
+**Attributes:** `t_min`, `t_max`, `t_ref`, `degree`, `inner_knots`, `knots`,
+`n_basis`, `basis_dim` (= `n_basis`), `n_above_t_max`, `t_grid` *(G,)*,
+`b_grid` *(G, J)*, `projector` *(J, G)*, `n_grid`, `basis_cond`,
+`ill_conditioned`.
 
 #### `transform(self, t_values: np.ndarray) -> np.ndarray`
 
-Returns the `(n, J)` design matrix.
+Returns the `(n, J)` design matrix; the input is clipped to `[0, T_max]`
+first (no spline extrapolation).
 
 #### `greville_abscissae(self) -> np.ndarray`
 
@@ -2071,7 +2819,9 @@ compatibility of call sites (the grid is fixed at construction).
 
 Relative RMS approximation error per alpha:
 `eps(alpha) = RMS_i(fbar(T_i) - sum_j c_j b_j(T_i)) / sd_i(fbar(T_i))` over
-the observed `T_i` of `D_sel` (or `t_eval`). Returns `0` where
+the observed `T_i` of `D_sel` (or `t_eval`). The default support is the
+sorted `t_values` clipped to `[0, T_max]` and quantile-compressed to 20 000
+points when larger. Returns `0` where
 `sd(fbar) == 0`. The normalization cancels between numerator and denominator,
 so `eps` is the same quantity as for the un-normalized `f`.
 
@@ -2081,17 +2831,25 @@ Dataclass returned by `select_basis_dim`.
 
 **Attributes:** `basis` *(TreatmentBasis)*, `n_basis` *(int)*, `approx_error`
 *(float, max over the grid)*, `satisfied` *(bool)*, `mode` *(str, `'auto'` or
-`'fixed'`)*, `scanned` *(Dict[int, float], J -> max error)*.
+`'fixed'`)*, `scanned` *(Dict[int, float], J -> max error)*, `basis_cond`
+*(float, `cond(B)` of the adopted basis)*, `scanned_cond` *(Dict[int, float],
+J -> `cond(B)`)*, `ill_conditioned` *(bool)*.
 
 ### Function: `select_basis_dim`
 
-#### `select_basis_dim(t_values, family, alphas, basis_dim='auto', tol=1e-3, dim_range=(6, 20), t_ref=None) -> BasisSelection`
+#### `select_basis_dim(t_values, family, alphas, basis_dim='auto', tol=1e-3, dim_range=(6, 20), t_ref=None, t_max=None) -> BasisSelection`
 
 Chooses `J`. With `basis_dim='auto'`, it scans `dim_range` in
-increasing order and adopts the smallest `J` with
-`max_alpha eps(J) < tol`. If no `J` qualifies, it uses `J_max` and returns
-`satisfied=False`, and the caller warns. An integer `basis_dim` fixes `J`.
-`t_ref` is threaded to every `TreatmentBasis` it builds.
+increasing order, skips bases with `cond(B) >= MAX_BASIS_CONDITION`, and
+adopts the smallest admissible `J` with `max_alpha eps(J) < tol`
+(`satisfied=True`). If no admissible `J` meets `tol`, the admissible `J`
+with the smallest `eps` is adopted with `satisfied=False` (the caller
+warns); if no `J` is admissible at all, the last scanned basis is returned
+with `ill_conditioned=True` (Stage B then adopts the linear model). An
+integer `basis_dim` fixes `J` (never rejected; `satisfied = eps < tol and
+not ill_conditioned`, and `ill_conditioned` reports whether the basis can be
+trusted). `t_ref` and `t_max` are threaded to every `TreatmentBasis` it
+builds.
 
 ### Function: `normalized_derivative`
 
@@ -2115,8 +2873,9 @@ allocates a positive amount to every `theta_t > 0` unit.
 
 #### `roi_cap(family, alpha, theta, threshold_roi, t_ref=None, t_upper=None, tol=1e-12, max_iter=200) -> np.ndarray`
 
-The ROI cap `T_t^r` of the saturation-aware optimizer. Because `ROI_t(T) = theta_t
-fbar(T) / T` is strictly decreasing, `ROI_t(T) >= r` is the upper bound
+The ROI cap `T_t^r` of the saturation-aware optimizer. Because
+`ROI_t(T) = theta_t fbar(T) / T` is strictly decreasing, `ROI_t(T) >= r` is
+the upper bound
 `T <= T_t^r` with `T_t^r = inf` when `r = 0`, `T_t^r = 0` when `theta_t
 fbar'(0) <= r` (or `theta_t <= 0`), and otherwise the unique root of
 `theta_t fbar(T) / T = r`, found by a vectorized bisection. With `t_upper`
@@ -2163,6 +2922,8 @@ exactly for every interior unit by construction. No greedy iteration.
 
 The allocation of `solve_budget_allocation` (kept for backward
 compatibility; `t_max` may be a scalar `T_bar` or a per-unit cap vector).
+`max_iter` is forwarded as `max(int(max_iter), 400)`; a non-positive budget,
+no positive cap or no positive `theta` returns an all-zero allocation.
 
 With `t_ref` (scalar or per-row, in the same units as `alpha` and
 `t_max`) the objective is the **normalized** `sum_t theta_t fbar(T_t; alpha,
@@ -2193,8 +2954,20 @@ the configured family and the linear model: Phase 0 returns
 -   `MIN_CLUSTERS_WARNING` *(int)*: `30`. Below this, a warning is emitted.
 -   `DATE_BLOCK_COL` *(str)*: `'cluster_date_block'`, the derived date-block
     column.
+-   `CELL_ID_SEP` *(str)*: `'|'`, the separator of the intersection-cell id
+    `"<key1>|<key2>"`.
 -   `INTERNAL_HELPER_COLS` *(Tuple[str, ...])*: Helper columns stripped before
     results are written out.
+-   `DEFAULT_FLATNESS_RATIO` *(float)*: `10.0`, the Diag2 default of
+    `alpha_selection.flatness_ratio`.
+-   `POWER_FLATNESS_RANGE` *(float)*: `0.4`, the fixed Diag2 threshold of
+    `power` (`alpha^max - alpha^min > 0.4`).
+-   `DEFAULT_T_REF_TOLERANCE` *(float)*: `1e-9`, the Diag6 default of
+    `alpha_selection.t_ref_tolerance`.
+-   `DIAG4_PERCENTILES` *(Tuple[int, ...])*: `(25, 50, 75, 90)`, the
+    percentiles `p` of the Diag4 shape quantiles `phi_p(alpha)`.
+-   `MIN_PHASE0_TIME_BUDGET` *(int)*: `5`, the floor (seconds) of the
+    scaled-down Phase 0 FLAML budget (`scale_time_budget`).
 
 ### Class: `ClusterKeyPlan`
 
@@ -2238,7 +3011,8 @@ adds `keys_used`, the columns the runner actually clustered on.
 #### `attach(self, df: pd.DataFrame) -> pd.DataFrame`
 
 Returns a **copy** of `df` with any derived cluster columns attached. Never
-mutates the input.
+mutates the input. When the plan has no derived columns, `df` itself is
+returned (no copy).
 
 ### Class: `TopLevelSplit`
 
@@ -2290,7 +3064,10 @@ to the JSON, not displayed)*.
 `log`, `NaN` for `power`; `grid_variable` *(str)*: its name
 (`saturation.grid_variable`).
 
-`decision_reason` explains `decision`: `'grid_edge_upper'` means
+`decision_reason` explains `decision`: `'basis_ill_conditioned'` means the
+adopted T-basis has `cond(B) >= saturation.MAX_BASIS_CONDITION`, so its
+Stage B statistics are not trusted and `selected_family = None` was forced
+(checked first, before the grid edge); `'grid_edge_upper'` means
 the argmin stayed on the linear-side grid edge after the extensions, so
 `selected_family = None` was forced regardless of the 1-SE statistics (which
 are still filled in); otherwise the 1-SE rule decided (`'1se_pass'` /
@@ -2299,7 +3076,8 @@ Diag2 fired) still sets `selected_family = family` afterwards, but `decision`
 / `decision_reason` keep describing the data-driven decision.
 
 Only Diag1 (`diag1_fired`) and Diag2 (`diag2_fired`) have a
-rule; Diag3-Diag5 are reported values. `diag2_ratio` is
+rule; Diag3-Diag5 are reported values. Diag1 fires when `eps(J) >= basis_tol`
+on the final grid **or** the basis is ill-conditioned. `diag2_ratio` is
 `T_1/2^max / T_1/2^min` over `A_1SE` (`T_knee` for log) and
 `alpha^max - alpha^min` for power.
 
@@ -2327,8 +3105,10 @@ adopted, indexed in time order). Cells are assigned by the interleaved
 round-robin rule `cell(a, b) ∈ D_sel ⇔ (idx(b) + π(a)) mod M == 0`
 (`M = round(1/sel_fraction)`, `π` a random permutation of the `k1` levels), or
 by a greedy balanced selection when `sel_fraction != 1/M`. A cell never
-straddles the two halves, and every level of every key appears on both sides
-(coverage guarantee; a repair step restores it on unbalanced panels). Tiers:
+straddles the two halves, and every level of every key should appear on both
+sides (coverage guarantee; a repair step restores it on unbalanced panels,
+but skips a level with fewer cells than groups — the result then carries
+`coverage_ok=False` and a message, and Phase 0 continues). Tiers:
 
 | Tier | When | Split unit |
 | :--- | :--- | :--- |
@@ -2361,7 +3141,7 @@ the split.
 
 ### Function: `select_alpha`
 
-#### `select_alpha(df_sel, y_col, d_col, x_cols, basis_builder, scaler, family, saturation_cfg, selection_cfg, cluster_labels, ml_models_y, ml_models_t, time_budget, n_jobs=-1, progress_dir=None, random_state=0, divisor=None, normalization='none', n_total=None, se_cluster_labels=None, se_cluster_key=None, item_col=None, geo_col=None, date_col=None, fold_key_values=None, fold_key_names=None, t_ref=None) -> AlphaSelectionResult`
+#### `select_alpha(df_sel, y_col, d_col, x_cols, basis_builder, scaler, family, saturation_cfg, selection_cfg, cluster_labels, ml_models_y, ml_models_t, time_budget, n_jobs=-1, progress_dir=None, random_state=0, divisor=None, normalization='none', n_total=None, se_cluster_labels=None, se_cluster_key=None, item_col=None, geo_col=None, date_col=None, fold_key_values=None, fold_key_names=None, t_ref=None, t_max=None) -> AlphaSelectionResult`
 
 With `fold_key_values` (the per-row `(k1, k2)` of `D_sel`) the per-seed folds
 are cell-level (`cell_kfold`); without it they are built on
@@ -2382,18 +3162,25 @@ Stage B end to end:
 3.  **Grid.** The half-saturation grid is built with
     `build_half_saturation_grid` (`T_knee` grid for `log`).
 4.  **Basis.** `J` is chosen with `select_basis_dim` on
-    `[0, T_max]` with knots at quantiles of `T > 0`; `c(alpha) = P fbar_alpha`
-    on the fixed 500-point grid.
+    `[0, T_max]` (`T_max` from the `t_max` argument, the 0.999 quantile of
+    `T > 0` of the full data; computed on `D_sel` with a message when
+    omitted) with knots at quantiles of `T > 0`; `c(alpha) = P fbar_alpha`
+    on the fixed projection grid (500 equally spaced points ∪ 201 quantiles
+    of `T > 0` ∪ the Greville abscissae). An ill-conditioned basis
+    (`cond(B) >= MAX_BASIS_CONDITION`) is warned about here.
 5.  **Seed loop.** For every seed, all alphas, the identity candidate and the
     intercept-only curve share the same partition and nuisances.
 6.  **Closed-form evaluation.** The batched alpha-dependent algebra gives the
     CATE curve with `S~_i(alpha) = fbar(T_i; alpha) - m_hat(X_i; alpha)`; the
     intercept-only curve `L_ATE(alpha)` is a diagnostic only.
 7.  **Grid extension.** While the argmin sits on an edge, the grid is
-    extended with no new ML fits (at most twice).
+    extended with no new ML fits (at most `grid.max_extensions` times,
+    default 2).
 8.  **Edge rule.** If the argmin is still on the **upper** (linear
     side) edge, `grid_edge_hit='upper'` and `selected_family=None` is forced
-    with `decision_reason='grid_edge_upper'`; a **lower** edge only warns.
+    with `decision_reason='grid_edge_upper'`; a **lower** edge only warns. An
+    ill-conditioned basis forces `selected_family=None` with
+    `decision_reason='basis_ill_conditioned'` (checked before the edge).
 9.  **Estimate.** "Average the curves, then take the argmin", plus Brent
     in the grid coordinate (on `fbar`). There is no per-alpha retraining.
 10. **1-SE test.** The identity candidate
@@ -2413,15 +3200,33 @@ Stage B end to end:
 
 **Additional parameters:**
 
+-   `n_jobs` *(int, default=-1)*: joblib parallelism of the seed loop.
+-   `progress_dir` *(Optional[str])*: directory where `.done` markers are
+    written (the Phase 0 progress display).
+-   `random_state` *(int, default=0)*: base seed of the partitions.
+-   `divisor` *(Optional[pd.Series])*: the treatment normalization bridge —
+    the scaler divisor `c` per row of `df_sel`; alpha is estimated against
+    `T / c` (raw units when `None`).
+-   `normalization` *(str, default='none')*: name of the normalization the
+    divisor came from (reported).
+-   `n_total` *(Optional[int])*: row count of the full sample, used to scale
+    the FLAML time budget (`scale_time_budget`).
 -   `se_cluster_labels` *(Optional[np.ndarray])*: labels of the selected
-    cluster key with the **fewer** clusters, used for `se_obs`; `None` means an
-    iid SE.
+    cluster key with the **fewer** clusters; they give the one-way
+    cluster-robust `se_one_way`, which is the decision se only when
+    `fold_key_values` is `None` (otherwise the decision uses the two-way se
+    on the two fold keys). `None` means an iid SE.
 -   `se_cluster_key` *(Optional[str])*: name of that key (reported only).
 -   `item_col` / `geo_col` / `date_col` *(Optional[str])*: used to build the
     RidgeCV small-sample features: one-hot item/geo plus annual Fourier
     terms.
 -   `t_ref` *(Optional[float])*: `T_ref` on the same `T / divisor`
     scale as the treatment Stage B sees. Must be finite and `> 0`.
+-   `t_max` *(Optional[float])*: `T_max`, the right end of the T-basis
+    domain (`saturation.basis_domain_max`, the 0.999 quantile of `T > 0`)
+    on the same scale, computed on the full data by the orchestrator.
+    `None` computes it on `D_sel` and records a message; otherwise it must
+    be finite and `> 0` (`ValueError`).
 
 `ml_models_y`, `ml_models_t` and `time_budget` are only used with
 `learners.learner_selection=True`.
@@ -2624,18 +3429,26 @@ alpha, so by default no AutoML is run:
     training folds.
 -   **T-model** `mu_hat_j`: **one**
     `xgboost.XGBRegressor(multi_strategy='multi_output_tree')` with `J`
-    outputs. Wrapping in `MultiOutputRegressor` is not allowed.
+    outputs (`tree_method='hist'` is set as well, and `random_state=seed`
+    per fit). The default T-learner is never wrapped in
+    `MultiOutputRegressor`; only the legacy `learner_selection=True` path
+    (`flaml_dml.MultiOutputFlamlRegressor` → `fit_multioutput`) falls back to
+    `sklearn.multioutput.MultiOutputRegressor` for a learner without native
+    multi-output support.
 -   **Small-sample switch**: when `n_sel < small_sample_threshold` (default
     2000), both models become `RidgeCV`. The features are standardized numeric
     covariates with cubic B-splines (5 df), one-hot item / geo, and annual
     Fourier terms of order 3.
 
 XGBoost is imported lazily. If XGBoost >= 2.0 is not importable, a
-`UserWarning` is emitted and scikit-learn stand-ins with matching
-hyperparameters are used: `HistGradientBoostingRegressor` for Y (same
-cluster-level early stopping) and one native multi-output
-`RandomForestRegressor` for T. This is the case for environments that only
-ship XGBoost 1.5.1.
+`UserWarning` is emitted and scikit-learn stand-ins with approximately
+matching hyperparameters are used: `HistGradientBoostingRegressor` for Y
+(`max_depth`, `learning_rate`, `max_iter = n_estimators`, `min_samples_leaf
+= min_child_weight`, `l2_regularization = reg_lambda`; same cluster-level
+early stopping) and one native multi-output `RandomForestRegressor` for T
+(`n_estimators=200`, `max_depth = 2 * max_depth`, `min_samples_leaf =
+min_child_weight`, `max_features = colsample_bytree`, `max_samples =
+subsample`). This is the case for environments that only ship XGBoost 1.5.1.
 
 ### Constants
 
@@ -2660,7 +3473,11 @@ Returns the `alpha_selection.learners` defaults:
 
 #### `resolve_learner_config(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]`
 
-Merges a user `learners` block onto the defaults.
+Merges a user `learners` block onto the defaults. A `y_model` / `t_model`
+`class` other than `'xgboost.XGBRegressor'` discards the default XGBoost
+`params` (the user `params` are then merged onto an empty dict);
+`learner_selection` is coerced to `bool` and `small_sample_threshold` to
+`int`.
 
 ### Function: `xgboost_status`
 
@@ -2685,20 +3502,44 @@ fold.
 Dataclass holding the resolved pair of learners: `y_learner`, `t_learner`
 *(StageBLearner)*, `small_sample` *(bool)*, `uses_small_sample_features`
 *(bool)*, `messages` *(List[str])*. `describe()` returns the JSON `learners`
-entry.
+entry with the keys `y_model`, `t_model` and `small_sample_switch`.
 
 Each learner implements `fit_predict(x_train, y_train, groups_train, x_all,
-seed) -> np.ndarray` and `describe() -> dict`. The implementations are
-`XGBoostLearner`, `SklearnBoostingFallback`,
-`SklearnMultiOutputForestFallback`, `GenericSklearnLearner` (a user
-`module.Class`) and `RidgeCVLearner`.
+seed) -> np.ndarray` and `describe() -> dict` (the interface is the
+`StageBLearner` base class, attribute `kind`). The implementations are:
+
+-   `XGBoostLearner(xgb_module, params, early_stopping_rounds, multi_output)`
+    — XGBoost >= 2.0; the multi-output variant sets
+    `multi_strategy='multi_output_tree'` and `tree_method='hist'`;
+    cluster-level early stopping when `early_stopping_rounds` is set.
+-   `SklearnBoostingFallback(params, early_stopping_rounds, reason)` — the
+    Y-model stand-in (`HistGradientBoostingRegressor`, patience applied on
+    staged predictions); `describe()` carries `fallback_reason`.
+-   `SklearnMultiOutputForestFallback(params, reason)` — the T-model
+    stand-in (one native multi-output `RandomForestRegressor`).
+-   `GenericSklearnLearner(class_path, params)` — a user-configured
+    `module.Class` estimator.
+-   `RidgeCVLearner(spline_cols, n_features)` — the small-sample switch:
+    `SplineTransformer` (cubic, 5 df) on `spline_cols` → `StandardScaler` →
+    `RidgeCV(alphas=logspace(-3, 3, 13))`, one model for the `J` outputs.
+
+### Function: `cluster_validation_split`
+
+#### `cluster_validation_split(groups, n_rows, rng, fraction=INTERNAL_VALIDATION_FRACTION) -> np.ndarray`
+
+Boolean validation mask for early stopping: whole clusters are held out
+(`ceil(fraction * n_clusters)`, at least one and never all), falling back to
+an observation-level split with fewer than two clusters; all `False` with
+fewer than four rows.
 
 ### Function: `resolve_stage_b_learners`
 
 #### `resolve_stage_b_learners(learner_cfg, n_sel, small_sample_spline_cols=(), small_sample_n_features=0) -> StageBLearners`
 
 Resolves the fixed learners from a resolved config. It returns RidgeCV for
-both nuisances when `n_sel < small_sample_threshold`, and the tree learners
+both nuisances when `n_sel < small_sample_threshold` **and**
+`small_sample_model` is `'ridge_cv'` / `'ridgecv'` / `'ridge'`
+(case-insensitive), and the tree learners
 otherwise (warning when a scikit-learn stand-in is used).
 
 --------------------------------------------------------------------------------
@@ -2720,7 +3561,7 @@ schemas are in [output_csv_schema.md](output_csv_schema.md).
 | `summary_alpha_seed-wise_alpha_distribution.csv` | `seed, alpha_hat_s, rloss_at_alpha_hat_s, rloss_identity_s, d_s` (the data behind the seed-wise alpha distribution panel of the alpha profile chart; visualization only). |
 | `others_split_coverage.csv` | `key, level, n_cells_sel, n_cells_inf, covered, n_folds_covered_min, fold_covered`: one row per level of every key; `covered` (both sides >= 1) verifies the coverage guarantee, `fold_covered` that the level is in all K Stage B folds. Drawn as `others_split_coverage.png`. |
 | `others_split_coverage_detail.csv` | `seed, cluster_id, key1_value, key2_value, fold, split` (fold `-1` for `D_inf`; `cluster_id` is the intersection cell `"<k1>|<k2>"`). |
-| `diag3_identification_diagnostics.csv` | `r_T, sd_T, sd_T_resid, share_T_zero, q50_T_pos, q95_T_pos, T_max, T_ref` (one row). |
+| `diag3_identification_diagnostics.csv` | `r_T, sd_T, sd_T_resid, share_T_zero, q50_T_pos, q95_T_pos, T_max, T_max_observed, T_ref` (one row; `T_max` is the basis-domain right end, `T_max_observed` is `max_{D_sel} T`). |
 | `diag6_t_ref_consistency.csv` | Written by the orchestrator at the start of Phase 1 (`write_diag6_output`): `treatment, status` (`pass` / `fail` / `skipped` when `selected_family = None`), `T_ref_phase0, T_ref_phase1, rel_error, t_ref_tolerance, t_ref_quantile, n_rows_phase1, note`. |
 | `diag1_basis_approx_error.png`, `diag2_rloss_profile.png`, `diag4_f_transform_quantiles.png`, `diag5_saturation_at_T_ref.png` (tanh / exp only), `others_split_coverage.png` | See the [Phase 0 figures](#phase-0-figures) in `visualization.plots`. |
 
@@ -2732,6 +3573,8 @@ orchestrator to the Phase 0 root.
 
 ### Constants
 
+-   `DIAG4_PERCENTILES` *(Tuple[int, ...])*: `(25, 50, 75, 90)` (shared with
+    `alpha_selection`).
 -   `SUMMARY_JSON` *(str)*: `'summary_alpha_selection.json'` (from
     `utils.io`, which holds every `step0_saturation/` file name).
 -   `CSV_FILES` / `PNG_FILES` / `BOUNDED_FAMILY_PNG_FILES` *(Tuple[str, ...])*:
@@ -2740,8 +3583,9 @@ orchestrator to the Phase 0 root.
 -   `ALPHA_GRID_COLUMNS` *(Tuple[str, ...])*: the column order of
     `summary_alpha_grid.csv`.
 -   `FOLD_ASSIGNMENT_COLUMNS` / `COVERAGE_COLUMNS` / `DIAG6_COLUMNS`
-    *(Tuple[str, ...])*: the column orders of `others_split_coverage_detail.csv`,
-    `others_split_coverage.csv` and `diag6_t_ref_consistency.csv`.
+    *(Tuple[str, ...])*: the column orders of
+    `others_split_coverage_detail.csv`, `others_split_coverage.csv` and
+    `diag6_t_ref_consistency.csv`.
 -   `SUMMARY_KEYS` *(Tuple[str, ...])*: `family`, `selected_family`,
     `alpha_hat`, `half_saturation_T`, `alpha_grid_argmin`, `rloss_min`,
     `refine_method`, `d_bar`, `se` (cluster-robust `se_obs`),
@@ -2753,12 +3597,20 @@ orchestrator to the Phase 0 root.
     `grid_extensions`, `grid_edge_hit`, `T_ref`, `T_max`,
     `cluster_keys`, `cluster_fallback_tier`, `n_sel`, `n_inf`, `n_seeds`,
     `k_folds`, `learners`.
-    `decision_reason ∈ {"1se_pass", "1se_fail", "grid_edge_upper"}`,
+    `decision_reason ∈ {"1se_pass", "1se_fail", "grid_edge_upper",
+    "basis_ill_conditioned"}`,
     `grid_edge_hit ∈ {"none", "upper", "lower"}`; `T_ref` / `T_max` are on
-    the Phase 0 scale `T / c`. Documented extras added by `build_summary`
-    include `flatness_ratio`, `basis_tol`, `fallback_half_saturation_T_used`,
-    `t_ref_quantile`, `T_ref_raw` (`c * T_ref` when `c` is a single constant)
-    and `grid_variable`.
+    the Phase 0 scale `T / c`. The documented extras added by `build_summary`
+    (in order) are `treatment`, `se_cluster_key`, `se_method`,
+    `se_cluster_keys`, `se_one_way`, `se_two_way`, `se_df`,
+    `linear_test_t_critical`, `critical_value`, `decision_under_one_way_se`,
+    `alpha_hat_estimated`, `flatness_ratio`, `basis_tol`,
+    `fallback_half_saturation_T_used`, `grid_edge_unresolved`, `basis_mode`,
+    `basis_cond`, `basis_ill_conditioned`, `T_max_quantile`,
+    `T_max_observed_sel`, `n_rows_above_T_max`, `normalization`,
+    `n_ml_fits`, `t_ref_quantile`, `T_ref_raw` (`c * T_ref` when `c` is a
+    single constant), `grid_variable`, `messages`, `fold_unit` and
+    `fold_keys`.
 
 ### Function: `write_diag6_output`
 
@@ -2780,8 +3632,9 @@ Returns `root` for a single treatment, and `root/<d_col>` otherwise.
 
 #### `build_summary(result, treatment, cluster_keys, cluster_fallback_tier, n_inf, extras=None) -> Dict[str, Any]`
 
-Builds the `summary_alpha_selection.json` payload as an ordered dict. The
-documented extras include `fold_unit` / `fold_keys`; the workflow adds
+Builds the `summary_alpha_selection.json` payload as an ordered dict:
+`SUMMARY_KEYS` first, then the documented extras listed under `SUMMARY_KEYS`
+above (ending with `fold_unit` / `fold_keys`); the workflow adds
 `split_unit`, `split_keys`, `coverage_ok`, `n_cells_total`, `n_cells_sel`
 through `extras`.
 
@@ -2830,7 +3683,9 @@ is the single place that names the files of the Phase 0 output folder
 `step0_saturation/`, so the writer
 (`evaluation.saturation_evaluation`), the figures (`visualization.plots`), the
 orchestrator (`workflow`) and the HTML report (`visualization.html_extraction`)
-agree on the names without importing each other.
+agree on the names without importing each other. It also names
+`metadata.json` and the `step4_consolidated_results/` files that the agent
+tools and the HTML report consume (the Phase 4 constants below).
 
 ### Constants (`step0_saturation/` file names)
 
@@ -2859,6 +3714,25 @@ agree on the names without importing each other.
     description)` of every per-treatment file, in reading order (the source of
     the file index the orchestrator prints / writes).
 
+### Constants (`metadata.json` and `step4_consolidated_results/` file names)
+
+| Constant | File (relative to `output_dir`) |
+| :--- | :--- |
+| `METADATA_FILE` | `metadata.json` |
+| `PHASE4_DIR` | `step4_consolidated_results` |
+| `FULL_DF_FILE` | `step4_consolidated_results/consolidated_1a_full_df.csv` |
+| `REPETITIONS_FILE` | `step4_consolidated_results/consolidated_3a_detail.csv` |
+| `SUMMARY_FILE` | `step4_consolidated_results/consolidated_3b_summary.csv` |
+| `GEO_SUMMARY_FILE` | `step4_consolidated_results/consolidated_3b_summary_geo.csv` |
+| `ITEM_SUMMARY_FILE` | `step4_consolidated_results/consolidated_3b_summary_item.csv` |
+| `CATE_COEF_FILE` | `step4_consolidated_results/graph/004_cate/cate_coef_dict_pooling.csv` |
+| `PRIOR_FILE` | `step4_consolidated_results/graph/005_prior/prior_parameters.csv` |
+| `SENSITIVITY_FILE` | `step4_consolidated_results/graph/006_sensitivity/sensitivity_metrics.csv` |
+| `OPTIMIZATION_FILE` | `step4_consolidated_results/graph/007_optimization/optimization_metrics.csv` |
+| `ROI_OUTPUT_OPTIMIZATION_FILE` | `step4_consolidated_results/roi_output/{treatment}/007_optimization/optimization_metrics.csv` (format with `treatment=<d_col>`; the same file for non-`spend` treatments) |
+
+-   `DIMENSIONS = ("geo", "item")`: the two segment dimensions.
+
 ### Function: `alpha_profile_png`
 
 #### `alpha_profile_png(treatment: str) -> str`
@@ -2878,7 +3752,10 @@ Write the step 1 (`1a_full_df_*.csv`, `1b_geo_item_*.csv`, `1c_metrics_*.csv`;
 `1a_full_df_*.csv` is skipped when `process_log='lightweight'`),
 step 2 (`2_shortlisted_models_metrics.csv`) and step 3
 (`3a_iteration_detail.csv`, `3b_iteration_summary.csv`, `best_model/`) outputs
-of a run.
+of a run. `best_model/` holds `3c_best_1a_df_<model_name>.csv`,
+`3c_best_1b_geo_item_<model_name>.csv` and
+`best_dml_object_<model_name>.pkl` (cloudpickle); `best_model_data` must
+contain `model_name`, `df_1a`, `df_1b` and `model_obj`.
 
 --------------------------------------------------------------------------------
 
@@ -3034,27 +3911,41 @@ charts.
     summary.
 -   `BUDGET_MODES = ('fixed', 'roi_target')`: the values of
     `optimization.budget_mode`.
+-   `DEFAULT_CAP_QUANTILE = 1.0`: default of `optimization.cap_quantile`
+    (the support cap is the cell maximum).
+-   `REALLOCATE_WITHIN = ('all', 'date')`: the values of
+    `optimization.reallocate_within`.
 
 ### Function: `compute_basis_theta`
 
-#### `compute_basis_theta(basis_df: pd.DataFrame, cate_coef_dict: Dict[str, float]) -> np.ndarray`
+#### `compute_basis_theta(basis_df: pd.DataFrame, cate_coef_dict: Dict[str, float]) -> Optional[np.ndarray]`
 
-Reconstructs the per-row CATE `theta(X)` from the fitted basis and coefficients.
+Reconstructs the per-row CATE `theta(X) = p(X)' beta` from the fitted basis
+and the pooled `{name}_coef` coefficients, **up to a positive scale factor**.
+Returns `None` when `basis_df` is `None`, `cate_coef_dict` is empty, or no
+`<name>_coef` key matches a basis column.
 
 ### Function: `estimate_theta_kpi_units`
 
 #### `estimate_theta_kpi_units(kpi_values, f_values, basis_theta=None, group_keys=None) -> np.ndarray`
 
-Recovers `theta` in KPI units via the identity `KPI_t = theta_t * f(T_t; alpha)`,
-so `theta = KPI / f` wherever `f > 0`. Rows with `T = 0` (where `f = 0` for all
-four families, including `tanh`) are reconstructed from `basis_theta`
-with median calibration.
+Recovers `theta` in KPI units via the identity
+`KPI_t = theta_t * f(T_t; alpha)`:
+`theta = KPI / f` wherever `f > 1e-9`. If `basis_theta` is given and
+reproduces that ratio (median calibration `scale = median(ratio /
+basis_theta)` with a median relative error below 5 % on at least
+`max(5, 5 %)` of the rows), the calibrated `scale * basis_theta` is returned
+for **every** row. Otherwise the rows with `f = 0` (where `T = 0` for all
+four families, including `tanh`) are filled with the median ratio within
+their `group_keys` group (the global median as fallback, and when no
+`group_keys` are given).
 
 ### Function: `compute_budget`
 
 #### `compute_budget(treatment_values: np.ndarray, budget_increment: float) -> float`
 
-Returns the budget cap `K = sum(T) * (1 + budget_increment)`.
+Returns the budget cap `K = max(0, (1 + budget_increment) * nansum(T))`.
+Raises `ValueError` if `budget_increment < -1`.
 
 ### Function: `optimize_saturation`
 
@@ -3082,7 +3973,6 @@ units (`reallocate_within='all'`) or one per date with the per-date budget
 modelled: the response of a row depends on that row's spend only, which is
 what makes the per-row KKT allocation exact.
 
-
 -   `budget_mode='fixed'`, `budget_reallocate=True` (default): `K' = K`, caps
     `T_bar_t^eff`;
 -   `budget_mode='fixed'`, `budget_reallocate=False`: `K' = K_+`,
@@ -3093,41 +3983,12 @@ what makes the per-row KKT allocation exact.
 `sum_t T_t* <= K` and `T_t* <= T_bar_t` always hold. Rows outside the target
 set keep their pre-optimization values in the `optimized_*` columns.
 
-### Class: `SaturationAllocation`
-
-Dataclass returned by `allocate_saturation_budget`. **Attributes:**
-`allocation` (`T_t*` per unit), `budget_mode`, `budget_k` (`K`; `NaN` under
-`roi_target`), `budget_k_prime` (`K'`, the budget handed to the solver: `K`
-or `K_+`), `k_out` (`sum_t T_t*`), `unspent_budget` (`K - K_out`),
-`marginal_roi_at_optimum` (`mu*`; `0` when every unit sits at its cap, `NaN`
-under `roi_target`), `t_bar`, `t_roi_cap` (`inf` where the threshold does
-not bind), `t_bar_eff` (`min(T_bar_t, T_t^r)`), `negative_roi` (`Z_0`),
-`capped_by_roi`, `capped_by_support` (units with `T_t* = T_bar_t`);
-**properties** `n_units`, `n_units_excluded_negative_roi`,
-`n_units_capped_by_roi`, `n_units_at_support_cap` (the counts written to
-`optimization_metrics.csv`).
-
-### Function: `allocate_saturation_budget`
-
-#### `allocate_saturation_budget(family, alpha, theta, t_actual, t_bar, threshold_roi=1.0, t_ref=None, budget_mode='fixed', budget_increment=0.0, budget_reallocate=True) -> SaturationAllocation`
-
-The array-level solver behind `optimize_saturation` (see the
-problem definition above). Returns a `SaturationAllocation` with `allocation`
-(`T_t*`), `budget_mode`, `budget_k` (`K`), `budget_k_prime` (`K'`), `k_out`
-(`sum_t T_t*`), `unspent_budget` (`K - K_out`), `marginal_roi_at_optimum`
-(`mu*`; `0` when the caps absorb the budget; `NaN` under `roi_target`),
-`t_bar`, `t_roi_cap`, `t_bar_eff`, `negative_roi` (`Z_0`), `capped_by_roi`,
-and the counts `n_units`, `n_units_excluded_negative_roi`,
-`n_units_capped_by_roi`. Raises `ValueError` for an unknown `budget_mode`, a
-negative threshold, or `roi_target` with `threshold_roi = 0`.
-
 `t_ref` is `T_ref` in **raw** treatment units (a scalar, or
 one value per row: `saturation.raw_scale_reference(T_ref, c_i)`). With it the
 objective is `sum_t theta_t fbar(T_t; alpha_i, T_ref_raw_i)` — exactly what
 Phases 1–3 estimated `theta` against, since `fbar(T/c; alpha, T_ref) =
 fbar(T; alpha_i, c T_ref)` with unit gain — the KKT inversion carries
-`kappa = f(T_ref; alpha)`, `gain` is ignored, and `optimization_metrics.csv`
-gains a `T_ref_raw` column (median over the aggregated rows). The orchestrator
+`kappa = f(T_ref; alpha)` and `gain` is ignored. The orchestrator
 always passes it; `t_ref=None` keeps the pre-normalization `gain * f`
 objective for legacy call sites.
 
@@ -3140,17 +4001,30 @@ objective for legacy call sites.
 
 `**kwargs` accepts `date_col`, `geo_col`, `item_col`, `sales_col`, `out_dir`.
 
+**Raises:**
+
+-   `ValueError`: On an unknown `budget_mode` or `reallocate_within`, or a
+    `cap_quantile` outside `(0, 1]`.
+
 **`optimization_metrics.csv` ** — one row per geo / item / `all`
 combination of the target units over `periods`, with the existing columns
-(`total_cost_of_treatment_in_periods`, the 3-a / 3-b columns
+(`treatment`, `other_cost_variables`, `target_geo`, `target_item`,
+`periods_start_date`, `periods_end_date`, `threshold_roi`,
+`total_cost_of_treatment_in_periods`, the 3-a / 3-b columns
 `incremental_KPI_<t>`, `roi_<t>`, `optimized_incremental_KPI_<t>`,
 `optimized_roi_<t>`, `optimized_total_cost_of_treatment_in_periods`,
-`reduction_of_cost_of_treatment`, …) and the KKT allocation statistics
+`reduction_of_cost_of_treatment`, …), the saturation columns
+`saturation_family`, `alpha_hat` (median over the aggregated rows; equal to
+the estimate unless the normalization made `alpha_i` vary), `alpha_hat_min`,
+`alpha_hat_max`, `T_ref_raw` (always written: the median `T_ref` in raw
+units over the aggregated rows, empty without `t_ref`),
+`budget_increment`, and the KKT allocation statistics
 `budget_mode`, `budget_reallocate`, `reallocate_within`, `cap_quantile`,
 `assumptions` (`no_carryover`), `K`, `K_out`, `unspent_budget`,
-`marginal_roi_at_optimum` (with `marginal_roi_at_optimum_min` / `_max`: the
-per-date `mu_d*` range under `reallocate_within='date'`, equal to `mu*`
-otherwise), `n_units`, `n_units_excluded_negative_roi`,
+`marginal_roi_at_optimum` (with `marginal_roi_at_optimum_min` / `_max`: under
+`reallocate_within='date'` the main column is the **median** of the per-date
+`mu_d*` and the two others their range; all equal to `mu*` under `'all'`),
+`n_units`, `n_units_excluded_negative_roi`,
 `n_units_capped_by_roi`, `n_units_at_support_cap`. `K`, `K_out`,
 `unspent_budget` and the counts are aggregated over the units of that row (a
 geo row may show a negative `unspent_budget` when budget was reallocated into
@@ -3178,12 +4052,44 @@ optimization period boundaries with dashed vertical lines.
 | `optimized_<treatment>` | Allocated treatment, **raw units** |
 | `optimized_<treatment>_transformed` | `fbar(T*; alpha, T_ref)` on the Phases 1–3 scale (`gain * f(T*; alpha)` without `t_ref`) |
 | `optimized_incremental_KPI_<treatment>` | KPI under the optimized allocation |
-| `optimized_<treatment>_<amt>` | Allocated spend amount |
-| `optimized_roi_<treatment>` | ROI under the optimized allocation |
-| `optimized_sales` | Total sales under the optimized allocation |
+| `optimized_<treatment>_spend` | Allocated spend amount (fixed column name; `g(T) = T`, so it equals the allocated treatment for the target units and the actual `treatment_amt` elsewhere) |
+| `optimized_roi_<treatment>` | ROI under the optimized allocation (`0` where the optimized spend is `0`) |
+| `optimized_<outcome_col>` | `Y + (KPI_opt - KPI)`, the projected outcome; written only when `outcome_col` is given (the orchestrator passes `y_col`) |
 
 > [!NOTE]
 > The consolidated CSV carries **raw treatment units** throughout. The fitted
 > `fbar(T; alpha_hat, T_ref)` values are preserved as `<d_col>_transformed` in
 > the **per-repetition** `df_1a` frames, not in the consolidated output.
+
+### Class: `SaturationAllocation`
+
+Dataclass returned by `allocate_saturation_budget`. **Attributes:**
+`allocation` (`T_t*` per unit), `budget_mode`, `budget_k` (`K`; `NaN` under
+`roi_target`), `budget_k_prime` (`K'`, the budget handed to the solver: `K`
+or `K_+`), `k_out` (`sum_t T_t*`), `unspent_budget` (`K - K_out`),
+`marginal_roi_at_optimum` (`mu*`; `0` when every unit sits at its cap, `NaN`
+under `roi_target`), `t_bar`, `t_roi_cap` (`inf` where the threshold does
+not bind), `t_bar_eff` (`min(T_bar_t, T_t^r)`), `negative_roi` (`Z_0`),
+`capped_by_roi`, `capped_by_support` (units with `T_t* = T_bar_t`);
+**properties** `n_units`, `n_units_excluded_negative_roi`,
+`n_units_capped_by_roi`, `n_units_at_support_cap` (the counts written to
+`optimization_metrics.csv`).
+
+### Function: `allocate_saturation_budget`
+
+#### `allocate_saturation_budget(family, alpha, theta, t_actual, t_bar, threshold_roi=1.0, t_ref=None, budget_mode='fixed', budget_increment=0.0, budget_reallocate=True) -> SaturationAllocation`
+
+The array-level solver behind `optimize_saturation` (see the
+problem definition above). `t_ref` is `T_ref` in raw units (a scalar or one
+value per unit), or `None` for the raw `f`. Returns a `SaturationAllocation`
+with `allocation`
+(`T_t*`), `budget_mode`, `budget_k` (`K`), `budget_k_prime` (`K'`), `k_out`
+(`sum_t T_t*`), `unspent_budget` (`K - K_out`), `marginal_roi_at_optimum`
+(`mu*`; `0` when the caps absorb the budget), `t_bar`, `t_roi_cap`,
+`t_bar_eff`, `negative_roi` (`Z_0`), `capped_by_roi`, `capped_by_support`,
+and the counts `n_units`, `n_units_excluded_negative_roi`,
+`n_units_capped_by_roi`, `n_units_at_support_cap`; `budget_k`,
+`budget_k_prime`, `unspent_budget` and `marginal_roi_at_optimum` are `NaN`
+under `roi_target`. Raises `ValueError` for an unknown `budget_mode`, a
+negative threshold, or `roi_target` with `threshold_roi = 0`.
 

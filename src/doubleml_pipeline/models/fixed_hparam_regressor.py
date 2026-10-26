@@ -47,8 +47,10 @@ VAL_METHODS = (VAL_METHOD_CV, VAL_METHOD_HOLDOUT)
 
 # Keys of `theta*` that are REPLACED by the constructor arguments of
 # `FixedHparamRegressor` (`estimator_cls(**params, n_jobs=n_jobs,
-# random_state=random_state)`), and keys that are fit-time objects FLAML may
-# leave on the estimator (never constructor parameters of a fresh fit).
+# random_state=random_state)`) whenever that argument is not None (a None
+# argument leaves FLAML's value in `theta*` untouched), and keys that are
+# fit-time objects FLAML may leave on the estimator (never constructor
+# parameters of a fresh fit).
 OVERRIDDEN_PARAM_KEYS = ('n_jobs', 'random_state')
 DROPPED_PARAM_KEYS = ('callbacks',)
 
@@ -110,7 +112,7 @@ def build_estimator(
       for key, value in dict(params or {}).items()
       if key not in DROPPED_PARAM_KEYS
   }
-  for key, value in (('n_jobs', n_jobs), ('random_state', random_state)):
+  for key, value in zip(OVERRIDDEN_PARAM_KEYS, (n_jobs, random_state)):
     if value is None:
       continue
     if accepts_parameter(estimator_cls, key):

@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "doubleml-pipeline: automated causal inference with Double Machine Learning and AutoML"
+authors:
+  - name: "Google LLC"
+version: 0.2.2
+date-released: 2026-07-05
+license: Apache-2.0
+repository-code: "https://github.com/google/doubleml-pipeline"
+url: "https://github.com/google/doubleml-pipeline"
+keywords:
+  - causal inference
+  - double machine learning
+  - marketing mix modeling
+  - uplift
+  - econometrics
+abstract: >-
+  A Python library that estimates the incremental impact and ROI of marketing
+  interventions (promotions, discounts, prices, media spend) from observational
+  panel data with Double Machine Learning and FLAML AutoML, including
+  saturation-aware treatment models, budget optimization and an agentic AI
+  layer for interpreting the estimates.
