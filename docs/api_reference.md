@@ -12,7 +12,7 @@ This document outlines the core public classes and functions available in the
 The central manager for orchestrating the DoubleML execution pipeline, handling
 parallelization, model selection, and visual reporting.
 
-#### `__init__(self, y_col, d_cols, x_cols_list, ml_models_y, ml_models_t, n_folds_list, output_dir, n_jobs=-1, covariates_for_cate_list=None, cate_structure_list=None, time_budget=15, date_col=None, geo_col=None, item_col=None, geo_name_col=None, item_name_col=None, run_sensitivity=False, sensitivity_scope=None, ground_truth_existence=False, ground_truth_effect_column=None, treatment_types=None, treatment_spend_cols=None, sales_col=None, peak_months=None, optimize=False, simple_optimization=None, opt_periods=None, opt_threshold_roi=1.0, opt_other_cost_variables=None, generate_html=True, opt_geos=None, opt_items=None, saturation_config=None, hparam_policy="global", generate_agent=True)`
+#### `__init__(self, y_col, d_cols, x_cols_list, ml_models_y, ml_models_t, n_folds_list, output_dir, n_jobs=-1, covariates_for_cate_list=None, cate_structure_list=None, time_budget=15, date_col=None, geo_col=None, item_col=None, geo_name_col=None, item_name_col=None, run_sensitivity=False, sensitivity_scope=None, ground_truth_existence=False, ground_truth_effect_column=None, treatment_types=None, treatment_spend_cols=None, sales_col=None, peak_months=None, optimize=False, simple_optimization=None, opt_periods=None, opt_threshold_roi=1.0, opt_other_cost_variables=None, generate_html=True, opt_geos=None, opt_items=None, saturation_config=None, hparam_policy="global")`
 
 **Parameters:**
 
@@ -146,10 +146,6 @@ parallelization, model selection, and visual reporting.
     estimation (cross-fitting, CATE, repetitions, median aggregation), the
     combined-error ranking or any Phase 4 output; it has no effect on Phase 0.
     Example: `"per_fold"`.
--   `generate_agent` *(bool, default=True)*: Whether to write an ADK agent that
-    analyzes the results to `<output_dir>/agents/causal_ml_insight_agent/`
-    (see [`doubleml_pipeline.agent`](#module-doubleml_pipelineagent)).
-    Run it with `adk web <output_dir>/agents`. Example: `False`.
 
 > [!NOTE]
 > Compute-time behaviour that applies under **both** policies: Phase 1
@@ -759,203 +755,6 @@ the other columns before a worker result is sent back) and
 `regroup_phase3_results(candidate_names, rep0_results, jobs, flat_results)`
 (rebuilds the per-candidate result list, repetition 0 = the Phase 1 result
 first; `ValueError` on a missing Phase 1 result or a job / result mismatch).
-
---------------------------------------------------------------------------------
-
-## Module: `doubleml_pipeline.agent`
-
-Turns the results of a pipeline run into a local
-[ADK](https://google.github.io/adk-docs/) agent that explains the causal
-estimates. The agent's tools only read the pipeline outputs and do all the
-arithmetic deterministically, so the LLM interprets DoubleML estimates instead
-of computing effects itself.
-
-### Function: `generate_agent`
-
-#### `generate_agent(results_dirs, *, output_dir=None, run_names=None, skills_dir=None, model='gemini-3.8-flash', agent_name='causal_ml_insight_agent')`
-
-Writes `__init__.py`, `agent.py`, `.env.example` and a copy of the skills to
-`<output_dir>/agents/<agent_name>/`. Regenerating overwrites these files. The
-agent refers to the runs by relative paths, so they can be moved together.
-
-**Parameters:**
-
--   `results_dirs` *(str | os.PathLike | Sequence)*: `output_dir` of a
-    completed pipeline run, or several of them (for example one per channel).
-    Treatment names must be unique across runs. Example:
-    `['results/Spend_TV', 'results/Spend_Flyer']`.
--   `output_dir` *(Optional[str | os.PathLike], default=None)*: Where to write
-    the agent. Defaults to the run's directory; required for several runs.
--   `run_names` *(Optional[Sequence[str]], default=None)*: Run names used in
-    answers. Default to the directory names.
--   `skills_dir` *(Optional[str | os.PathLike], default=None)*: Directory whose
-    subdirectories with a `SKILL.md` are copied into the agent. Defaults to the
-    skills bundled in `doubleml_pipeline/skills/`. Example: `'./my_skills'`.
--   `model` *(str, default='gemini-3.8-flash')*: Gemini model of the agent.
--   `agent_name` *(str, default='causal_ml_insight_agent')*: Agent and folder
-    name; must be a valid Python identifier.
-
-**Returns:**
-
--   `pathlib.Path`: The generated agent directory.
-
-**Raises:**
-
--   `FileNotFoundError`: If a run has no `metadata.json`, or `skills_dir` does
-    not exist.
--   `ValueError`: If `results_dirs` is empty; `output_dir` is omitted for
-    several runs; run names are not unique; a treatment appears in several
-    runs; `agent_name` is not a valid Python identifier; `model` is empty; no
-    `SKILL.md` is found under the skills directory; or `skills_dir` lies
-    inside the generated agent (which is replaced on generation).
-
-### Function: `schema_excerpt`
-
-Defined in `doubleml_pipeline.agent.generator` (not re-exported by the
-package).
-
-#### `schema_excerpt(sections=('consolidated_1a_full_df.csv', 'cate_coef_dict_pooling.csv'), schema_doc=OUTPUT_SCHEMA_DOC) -> str`
-
-Returns the `#### <file>` sections of `docs/output_csv_schema.md` named in
-`sections`, joined; an empty string when the document is missing from the
-installed package.
-
-### Function: `build_browser_system_instruction`
-
-Defined in `doubleml_pipeline.agent.generator` (not re-exported by the
-package).
-
-#### `build_browser_system_instruction(skills_dir=None) -> str`
-
-The system instruction of the in-browser `AI Assistant (Gemini)` tab of the
-HTML report: `INSTRUCTION`, followed by every `*.md` file under the skills
-directory (bundled skills by default), the `schema_excerpt()` and a "Browser
-Report Mode" block stating that the outputs of the `TOOL_NAMES` tools are
-precomputed in the embedded snapshot (`get_segment_profile` excepted).
-
-### Constants
-
--   `DEFAULT_AGENT_MODEL = "gemini-3.8-flash"`,
-    `DEFAULT_AGENT_NAME = "causal_ml_insight_agent"`: defaults of
-    `generate_agent` / `Chat`.
--   `AGENT_DESCRIPTION`: the agent's one-line description;
-    `AGENTS_DIRNAME = "agents"`; `BUNDLED_SKILLS_DIR` (the package's
-    `skills/` directory); `OUTPUT_SCHEMA_DOC` (the package's
-    `docs/output_csv_schema.md`).
--   `TOOL_NAMES` (`agent.results_reader`): the six `CausalResultsReader`
-    methods exposed as tools, in prompt order: `get_analysis_overview`,
-    `get_treatment_effects`, `get_effects_by`, `get_segment_profile`,
-    `get_model_diagnostics`, `get_budget_optimization`.
-
-### Class: `CausalResultsReader`
-
-#### `__init__(self, results)`
-
-Reads `metadata.json` from `results` (the `output_dir` of a completed run, or a
-mapping from run name to `output_dir` for several runs) and exposes the analysis
-tools below. Tools route each treatment to the run that estimated it, and report
-runs side by side without adding effects across them. Each tool returns a
-JSON-serializable dict whose `status` is `"ok"`, `"unavailable"` (the run did
-not produce the required
-output), `"invalid_argument"`, or `"error"` (any other exception; `reason`
-is `"<ExcType>: <msg>"`, so a tool failure never ends the agent's turn).
-
-#### `tools(self)`
-
-Returns the bound tool methods, ready to pass to `google.adk.Agent(tools=...)`.
-
-#### `snapshot(self)`
-
-Returns a JSON-serializable dict of precomputed outputs of every
-`CausalResultsReader` tool except `get_segment_profile` (free-form segment
-argument, not precomputed). Used by `generate_html_report` to power the
-serverless in-browser `AI Assistant (Gemini)` tab of the HTML report
-(`<treatment>_<outcome>[_<family>].html`).
-
-Tool                                                                  | Answers
---------------------------------------------------------------------- | -------
-`get_analysis_overview()`                                             | Outcome, data (rows, daily/weekly frequency, period, segment dimensions), treatments, the ROI threshold, the keys `get_effects_by` accepts and the available analyses.
-`get_treatment_effects()`                                             | Incremental KPI with 95% interval, effect per unit, ROI on spend and outcome share per treatment, with the reliability signals `roi_vs_threshold` (`worth_investing` / `not_worth_investing` / `undetermined`), `low_sample` and `plausibility_flags`.
-`get_effects_by(by, treatment=None, cross_with=None, bins=4, within=None, start=None, end=None, sort_by='incremental_kpi', page=1, page_size=50)` | The effect broken down by a segment dimension (`geo`, `item`), a period (`week`, `month`, `quarter`, `year`, `month_of_year`, `day_of_week` for daily data) or any input column (quantile bins, optionally cut `within` each geo or item), optionally crossed with a second key into a 2-D table, restricted to a `start` / `end` date window and paged. Reports `data_period`, `window`, `threshold_summary`, `ci_separation`, `low_sample_groups`, `column_role`, `effect_drivers` and `heterogeneity_evidence`.
-`get_segment_profile(dimension, segment, treatment=None, columns=None)` | One geo or item in the input data before estimation: size, outcome share, treatment intensity and spend share, and its covariates against the overall mean. The check behind implausible or outlying estimates.
-`get_model_diagnostics(treatment=None)`                               | Stability across repetitions, sensitivity to unobserved confounding, and the fitted CATE specification with per-covariate evidence (`strong (p=...)`, `weak (p=...)`, `none (p=...)`; `p<0.001` below 0.001).
-`get_budget_optimization(treatment=None, dimension='total', granularity='month', top_n=10)` | Optimized allocation of a run made with `optimize=True` (simple or saturation-aware): spend, incremental KPI and ROI before and after, overall, per date period or for the geos / items with the largest spend changes, with assumptions and warnings.
-
-`generate_agent` copies `docs/output_csv_schema.md` into each copied skill
-(bundled or from a user `skills_dir`) as `references/output_csv_schema.md`,
-so the agent can look up what any output file or column means (skipped when
-the installed package ships without `docs/output_csv_schema.md`).
-
-### Class: `Chat`
-
-Exported lazily from `doubleml_pipeline.agent` (together with `Turn` and
-`ask`; they import `google.adk`, which the pipeline itself does not need, so
-the import fails only when `google-adk` is missing). `Chat` runs the same
-agent that `generate_agent` writes to disk, in process on
-`google.adk.runners.InMemoryRunner`, so it works in Colab and Jupyter without
-`adk web`.
-
-#### `__init__(self, results, *, api_key=None, vertexai=None, model=DEFAULT_AGENT_MODEL, skills_dir=None)`
-
-**Parameters:**
-
--   `results` *(str | os.PathLike | Mapping[str, PathLike])*: The
-    `output_dir` of a completed run, or a mapping from run name to
-    `output_dir` for several runs (treatment names must be unique).
--   `api_key` *(Optional[str], default=None)*: Used regardless of the
-    environment when given (and mirrored into `GOOGLE_API_KEY` /
-    `GOOGLE_GENAI_USE_VERTEXAI`); otherwise the environment decides between
-    Vertex AI (`GOOGLE_GENAI_USE_VERTEXAI=TRUE`) and `GOOGLE_API_KEY`.
--   `vertexai` *(Optional[bool], default=None)*: Backend of an explicit key:
-    the Gemini API (AI Studio) by default, `True` for a Vertex AI express
-    mode key.
--   `model` *(str, default=`DEFAULT_AGENT_MODEL`)*: Gemini model name.
--   `skills_dir` *(Optional[PathLike], default=None)*: Skills to load;
-    defaults to the bundled skills.
-
-**Raises:**
-
--   `ValueError`: Without `api_key` when the environment has neither
-    `GOOGLE_API_KEY` nor `GOOGLE_GENAI_USE_VERTEXAI=TRUE`.
-
-**Attributes:** `history` *(List[Turn])*, the turns of the conversation.
-
-#### `async ask(self, question) -> Turn`
-
-Sends `question` in the current conversation (a session is created on first
-use) and returns the `Turn`, which is also appended to `history`.
-
-#### `reset(self) -> None`
-
-Starts a new conversation; the agent forgets previous turns and `history` is
-cleared.
-
-#### `ui(self, placeholder='Ask about the causal estimates...')`
-
-Returns an ipywidgets chat widget (transcript, status line, prompt, `Send`
-and `New chat` buttons); each turn is rendered as Markdown. Raises
-`ImportError` without `ipywidgets` / `IPython`.
-
-### Class: `Turn`
-
-Frozen dataclass `Turn(question, answer, tool_calls)` — a question, the
-analyses the agent ran (`tool_calls`, a sequence of frozen
-`ToolCall(name, args)`) and its answer. `str(turn)` is the answer text;
-notebooks render it as Markdown (`_repr_markdown_`).
-
-### Function: `ask`
-
-#### `async ask(results, question, *, api_key=None, vertexai=None, **kwargs) -> Turn`
-
-Asks a single question about a run with no conversation history; equivalent
-to `await Chat(results, api_key=api_key, vertexai=vertexai,
-**kwargs).ask(question)`.
-
-### Constant: `INSTRUCTION`
-
-The default system instruction of the generated agent. It limits the agent to
-questions that the causal estimates can answer and requires every number to
-come from a tool result.
 
 --------------------------------------------------------------------------------
 
@@ -2185,15 +1984,13 @@ prior parameters, the optimization metrics and yearly summary (of
 `graph/007_optimization/` and, per non-`spend` treatment,
 `roi_output/<treatment>/007_optimization/`), and for a saturation run
 `step0_saturation[/<treatment>]/summary_alpha_selection.json` together with
-the Phase 0 PNGs. The `AI Assistant` tab embeds
-`CausalResultsReader(output_dir).snapshot()` and
-`build_browser_system_instruction()`.
+the Phase 0 PNGs.
 
 **Tabs:** `000_saturation` (when `metadata["saturation_phase0"]` is
 non-empty), `001_total`, `002_geo`, `003_item`, `004_cate`, `005_prior`,
 `006_sensitivity`, `007_optimization` (when some treatment type is `spend`),
-`roi_output_001_time_series_charts (<t>)` … `roi_output_007_optimization
-(<t>)` per non-`spend` treatment, and `✨ AI Assistant (Gemini)`.
+and `roi_output_001_time_series_charts (<t>)` … `roi_output_007_optimization
+(<t>)` per non-`spend` treatment.
 
 **File name:** `<output_dir>/<treatment>_<outcome>[_<family>].html`. Every
 part is sanitized with `re.sub(r"[^0-9A-Za-z._-]+", "_", …).strip("._-")`,
@@ -3684,8 +3481,8 @@ is the single place that names the files of the Phase 0 output folder
 (`evaluation.saturation_evaluation`), the figures (`visualization.plots`), the
 orchestrator (`workflow`) and the HTML report (`visualization.html_extraction`)
 agree on the names without importing each other. It also names
-`metadata.json` and the `step4_consolidated_results/` files that the agent
-tools and the HTML report consume (the Phase 4 constants below).
+`metadata.json` and the `step4_consolidated_results/` files that the
+orchestrator and the HTML report consume (the Phase 4 constants below).
 
 ### Constants (`step0_saturation/` file names)
 

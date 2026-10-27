@@ -23,14 +23,7 @@ from typing import Any
 from doubleml_pipeline.utils import io as pipeline_io
 import pandas as pd
 
-from ..agent import generator as agent_generator
-from ..agent import results_reader
 from ..utils import io
-
-
-def _safe_script_json(value: object) -> str:
-  """Serializes a value to JSON safe for embedding inside a <script> tag."""
-  return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
 
 
 def _sanitize_for_filename(value: str) -> str:
@@ -663,12 +656,6 @@ def generate_html_report(output_dir: str) -> str | None:
   trt_opt_metrics["main"] = extract_opt_metrics(optimization_metrics_csv_path)
 
   opt_metrics_json = json.dumps(trt_opt_metrics)
-  causal_snapshot_json = _safe_script_json(
-      results_reader.CausalResultsReader(output_dir).snapshot()
-  )
-  ai_system_instruction_json = _safe_script_json(
-      agent_generator.build_browser_system_instruction()
-  )
 
   def extract_yearly_summary(csv_path):
     """Reads ``optimization_yearly_summary.csv`` into the matrix payload.
@@ -789,9 +776,6 @@ def generate_html_report(output_dir: str) -> str | None:
         .tab-button {{ background-color: #e8f5e9; float: left; border: none; outline: none; cursor: pointer; padding: 14px 16px; font-size: 16px; font-weight: bold; color: #2e7d32; transition: 0.3s; margin-right: 5px; border-radius: 5px 5px 0 0; }}
         .tab-button:hover {{ background-color: #c8e6c9; }}
         .tab-button.active {{ background-color: #2e7d32; color: white; }}
-        .tab-button-ai {{ background: linear-gradient(135deg, #1b5e20, #2e7d32); color: #ffffff; }}
-        .tab-button-ai:hover {{ background: linear-gradient(135deg, #2e7d32, #388e3c); color: #ffffff; }}
-        .tab-button-ai.active {{ background: #0d3b10; color: #ffffff; box-shadow: inset 0 -3px 0 #81c784; }}
         .tab-content {{ display: none; padding: 20px; border: 1px solid #c8e6c9; border-top: none; background-color: white; }}
         .data-table {{ border-collapse: collapse; width: 50%; margin-top: 15px; margin-bottom: 15px; }}
         .data-table th, .data-table td {{ text-align: left; padding: 8px; border: 1px solid #c8e6c9; color: #000; }}
@@ -814,41 +798,6 @@ def generate_html_report(output_dir: str) -> str | None:
         .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); }}
         .modal-content {{ margin: auto; display: block; max-width: 90%; max-height: 90%; margin-top: 2%; }}
         .close {{ position: absolute; top: 15px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }}
-
-        .ai-panel {{ color: #1f2937; max-width: 1100px; }}
-        .ai-banner {{ background-color: #f0fdf4; border: 1px solid #bbf7d0; border-left: 5px solid #1b5e20; border-radius: 6px; padding: 12px 16px; margin-bottom: 14px; }}
-        .ai-banner h3 {{ margin: 0 0 4px 0; color: #1b5e20; font-size: 18px; }}
-        .ai-banner p {{ margin: 0; font-size: 13px; color: #374151; line-height: 1.5; }}
-        .ai-controls-row {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }}
-        .ai-control-group {{ display: flex; flex-direction: column; gap: 4px; }}
-        .ai-control-group label {{ font-size: 12px; font-weight: bold; color: #1b5e20; }}
-        .ai-input {{ padding: 8px 10px; font-size: 14px; border: 1px solid #cbd5e1; border-radius: 4px; color: #111827; }}
-        .ai-preset-bar {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }}
-        .ai-btn {{ background-color: #2e7d32; color: white; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: bold; cursor: pointer; }}
-        .ai-btn:hover {{ background-color: #1b5e20; }}
-        .ai-btn:disabled {{ background-color: #9ca3af; cursor: not-allowed; }}
-        .ai-btn-secondary {{ background-color: #e8f5e9; color: #1b5e20; border: 1px solid #a5d6a7; }}
-        .ai-btn-secondary:hover {{ background-color: #c8e6c9; }}
-        .ai-chat-thread {{ border: 1px solid #cbd5e1; border-radius: 8px; background-color: #f8fafc; padding: 16px; min-height: 280px; max-height: 520px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }}
-        .ai-msg {{ padding: 12px 16px; border-radius: 8px; max-width: 88%; line-height: 1.55; font-size: 14px; }}
-        .ai-msg-user {{ align-self: flex-end; background-color: #1b5e20; color: #ffffff; white-space: pre-wrap; }}
-        .ai-msg-model {{ align-self: flex-start; background-color: #ffffff; color: #111827; border: 1px solid #cbd5e1; }}
-        .ai-msg-model h1, .ai-msg-model h2, .ai-msg-model h3, .ai-msg-model h4 {{ color: #1b5e20; margin: 10px 0 6px 0; }}
-        .ai-msg-model p {{ margin: 6px 0; }}
-        .ai-msg-model hr {{ border: none; border-top: 1px solid #cbd5e1; margin: 12px 0; }}
-        .ai-msg-model ul {{ margin: 6px 0; padding-left: 20px; }}
-        .ai-msg-model table {{ border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }}
-        .ai-msg-model th, .ai-msg-model td {{ border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; color: #111827; }}
-        .ai-msg-model th {{ background-color: #e8f5e9; color: #1b5e20; }}
-        .ai-msg-model pre {{ background-color: #1e293b; color: #f8fafc; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 12px; }}
-        .ai-msg-model code {{ background-color: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-family: monospace; font-size: 12px; }}
-        .ai-input-row {{ display: flex; gap: 8px; align-items: stretch; }}
-        .ai-prompt-box {{ flex: 1; min-height: 54px; padding: 10px; font-size: 14px; font-family: inherit; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; }}
-        .ai-status {{ font-size: 13px; font-weight: bold; color: #1b5e20; margin: 6px 0; min-height: 18px; }}
-        .ai-status.error {{ color: #dc2626; }}
-        .ai-details {{ margin-top: 12px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; }}
-        .ai-details summary {{ cursor: pointer; font-weight: bold; font-size: 12px; color: #1b5e20; }}
-        .ai-pre {{ background-color: #1e293b; color: #f8fafc; padding: 10px; border-radius: 6px; font-size: 11px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin-top: 6px; }}
     </style>
 </head>
 <body>
@@ -910,7 +859,7 @@ def generate_html_report(output_dir: str) -> str | None:
         <button class="tab-button" onclick="openTab(event, 'tab_{t}_roi_output_007')">roi_output_007_optimization ({t})</button>
 """
 
-  html += """        <button class="tab-button tab-button-ai" onclick="openTab(event, 'tab_ai_assistant')">✨ AI Assistant (Gemini)</button>\n    </div>\n\n"""
+  html += "    </div>\n\n"
 
   html += f"""
     <div id="tab_001_total" class="tab-content" style="display:block;">
@@ -1169,53 +1118,6 @@ def generate_html_report(output_dir: str) -> str | None:
     </div>
 """
 
-  html += """
-    <div id="tab_ai_assistant" class="tab-content">
-        <div class="ai-panel">
-            <div class="ai-banner">
-                <h3>✨ AI Causal Assistant (Gemini + Bundled Agent Skills)</h3>
-                <p>
-                    Enter your Gemini API Key below to chat directly with the DoubleML causal estimates in your browser.
-                </p>
-            </div>
-            <div class="ai-controls-row">
-                <div class="ai-control-group" style="flex: 1; min-width: 260px;">
-                    <label for="ai_api_key">Gemini API Key</label>
-                    <input type="password" id="ai_api_key" class="ai-input" placeholder="AIzaSy..." autocomplete="off" />
-                </div>
-                <div class="ai-control-group">
-                    <label for="sel_ai_model">Gemini Model</label>
-                    <select id="sel_ai_model" class="ai-input" style="margin-right: 0;">
-                        <option value="gemini-3.8-flash" selected>gemini-3.8-flash</option>
-                        <option value="gemini-4-argon">gemini-4-argon</option>
-                    </select>
-                </div>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="clearAiApiKey()">Clear Key</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="resetAiChat()">Reset Chat</button>
-            </div>
-            <div class="ai-preset-bar">
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Give me the full review of this run: result summary, analysis setup, overall ROI with its verdict against the ROI threshold, where and when it works, what amplifies it, recommended actions, and caveats. Label each statement as fact (input data), inference (model estimate) or hypothesis.')">Full Review</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Summarize the overall spend, incremental impact and ROI with its 95% interval and the verdict against the ROI threshold.')">Overall ROI</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('Where does it work? Rank stores or regions and products by ROI, name the ones worth and not worth investing in, and flag low-sample or implausible segments.')">Where It Works</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('When does it work? Compare months of the year (and weekdays if the data is daily) by ROI and spend.')">When It Works</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('How far can the estimates be trusted? Cover repetition stability, sensitivity to confounding, which covariates the effect depends on and the strength of that evidence.')">Can We Trust It</button>
-                <button type="button" class="ai-btn ai-btn-secondary" onclick="askAiPreset('If the pipeline optimized the budget, where and when does the optimized allocation move spend, what does the model expect from it, and what assumptions and warnings apply?')">Budget Optimization</button>
-            </div>
-            <div id="ai_chat_thread" class="ai-chat-thread"></div>
-            <div id="ai_chat_status" class="ai-status"></div>
-            <div class="ai-input-row">
-                <textarea id="ai_chat_input" class="ai-prompt-box" placeholder="Ask a question about the causal estimates... (Enter to send, Shift+Enter for a new line)" onkeydown="handleAiChatKeydown(event)"></textarea>
-                <button type="button" id="btn_ai_send" class="ai-btn" onclick="sendAiChatMessage()">Send</button>
-            </div>
-            <details class="ai-details">
-                <summary>Inspect Precomputed CausalResultsReader Snapshot &amp; System Instruction</summary>
-                <pre id="ai_snapshot_preview" class="ai-pre"></pre>
-                <pre id="ai_instruction_preview" class="ai-pre"></pre>
-            </details>
-        </div>
-    </div>
-"""
-
   image_dict_json = json.dumps(image_dict)
   geo_index_json = json.dumps(geo_index_map)
   item_index_json = json.dumps(item_index_map)
@@ -1237,8 +1139,6 @@ def generate_html_report(output_dir: str) -> str | None:
         const phase4Fallback = {phase4_fallback_json};
         const yearlySummaryData = {yearly_summary_json};
         const sensSelectedFamily = {sens_selected_family_json};
-        const causalAnalysisSnapshot = {causal_snapshot_json};
-        const aiSystemInstruction = {ai_system_instruction_json};
 
         function renderMetrics(divId, key) {{
             var div = document.getElementById(divId);
@@ -1700,280 +1600,12 @@ def generate_html_report(output_dir: str) -> str | None:
 """
 
   html += """
-        let aiChatHistory = [];
-
-        function appendInlineFormattedText(parent, text) {
-            var tokenRegex = /(\\*\\*[^*]+\\*\\*|`[^`]+`)/g;
-            var parts = String(text).split(tokenRegex);
-            for (var i = 0; i < parts.length; i++) {
-                var part = parts[i];
-                if (!part) continue;
-                if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
-                    var strong = document.createElement("strong");
-                    strong.textContent = part.slice(2, -2);
-                    parent.appendChild(strong);
-                } else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
-                    var code = document.createElement("code");
-                    code.textContent = part.slice(1, -1);
-                    parent.appendChild(code);
-                } else {
-                    parent.appendChild(document.createTextNode(part));
-                }
-            }
-        }
-
-        function appendMarkdownDom(container, markdownText) {
-            container.replaceChildren();
-            var lines = String(markdownText || "").replace(/\\r\\n/g, "\\n").split("\\n");
-            var i = 0;
-            while (i < lines.length) {
-                var line = lines[i];
-                var trimmed = line.trim();
-                if (!trimmed) {
-                    i++;
-                    continue;
-                }
-                if (trimmed.startsWith("```")) {
-                    var codeLines = [];
-                    i++;
-                    while (i < lines.length && !lines[i].trim().startsWith("```")) {
-                        codeLines.push(lines[i]);
-                        i++;
-                    }
-                    i++;
-                    var pre = document.createElement("pre");
-                    pre.textContent = codeLines.join("\\n");
-                    container.appendChild(pre);
-                    continue;
-                }
-                if (/^(-{3,}|\\*{3,}|_{3,})$/.test(trimmed.replace(/\\s+/g, ""))) {
-                    container.appendChild(document.createElement("hr"));
-                    i++;
-                    continue;
-                }
-                var headingMatch = trimmed.match(/^(#{1,4})\\s+(.*)$/);
-                if (headingMatch) {
-                    var level = Math.min(4, headingMatch[1].length);
-                    var h = document.createElement("h" + level);
-                    appendInlineFormattedText(h, headingMatch[2]);
-                    container.appendChild(h);
-                    i++;
-                    continue;
-                }
-                if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
-                    var tableLines = [];
-                    while (i < lines.length && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
-                        tableLines.push(lines[i].trim());
-                        i++;
-                    }
-                    var table = document.createElement("table");
-                    var hasHeader = false;
-                    for (var r = 0; r < tableLines.length; r++) {
-                        var rawCells = tableLines[r].slice(1, -1).split("|").map(function(c) { return c.trim(); });
-                        if (rawCells.every(function(c) { return /^:?-{2,}:?$/.test(c); })) {
-                            continue;
-                        }
-                        var tr = document.createElement("tr");
-                        var cellTag = (!hasHeader && r === 0) ? "th" : "td";
-                        if (r === 0) hasHeader = true;
-                        for (var cIdx = 0; cIdx < rawCells.length; cIdx++) {
-                            var cell = document.createElement(cellTag);
-                            appendInlineFormattedText(cell, rawCells[cIdx]);
-                            tr.appendChild(cell);
-                        }
-                        table.appendChild(tr);
-                    }
-                    container.appendChild(table);
-                    continue;
-                }
-                if (/^([-*]|\\d+\\.)\\s+/.test(trimmed)) {
-                    var ul = document.createElement("ul");
-                    while (i < lines.length && /^([-*]|\\d+\\.)\\s+/.test(lines[i].trim())) {
-                        var liText = lines[i].trim().replace(/^([-*]|\\d+\\.)\\s+/, "");
-                        var li = document.createElement("li");
-                        appendInlineFormattedText(li, liText);
-                        ul.appendChild(li);
-                        i++;
-                    }
-                    container.appendChild(ul);
-                    continue;
-                }
-                var p = document.createElement("p");
-                appendInlineFormattedText(p, trimmed);
-                container.appendChild(p);
-                i++;
-            }
-        }
-
-        function appendChatMessage(role, text) {
-            var thread = document.getElementById("ai_chat_thread");
-            if (!thread) return;
-            var msgDiv = document.createElement("div");
-            msgDiv.className = "ai-msg " + (role === "user" ? "ai-msg-user" : "ai-msg-model");
-            if (role === "user") {
-                msgDiv.textContent = text;
-            } else {
-                appendMarkdownDom(msgDiv, text);
-            }
-            thread.appendChild(msgDiv);
-            thread.scrollTop = thread.scrollHeight;
-        }
-
-        function resetAiChat() {
-            aiChatHistory = [];
-            var thread = document.getElementById("ai_chat_thread");
-            if (thread) {
-                thread.replaceChildren();
-            }
-            appendChatMessage(
-                "model",
-                "Welcome! Enter your Gemini API Key above and ask any question about the DoubleML causal estimates (incremental KPI, ROI, 95% confidence intervals, CATE heterogeneity, or robustness checks)."
-            );
-            var status = document.getElementById("ai_chat_status");
-            if (status) {
-                status.className = "ai-status";
-                status.textContent = "";
-            }
-        }
-
-        function clearAiApiKey() {
-            var keyInput = document.getElementById("ai_api_key");
-            if (keyInput) {
-                keyInput.value = "";
-            }
-        }
-
-        function initAiAssistantTab() {
-            var snapPre = document.getElementById("ai_snapshot_preview");
-            if (snapPre) {
-                snapPre.textContent = JSON.stringify(causalAnalysisSnapshot, null, 2);
-            }
-            var instrPre = document.getElementById("ai_instruction_preview");
-            if (instrPre) {
-                instrPre.textContent = aiSystemInstruction;
-            }
-            resetAiChat();
-        }
-
-        function handleAiChatKeydown(evt) {
-            if (evt.key !== "Enter" || evt.shiftKey) return;
-            // Enter while an IME (e.g. Japanese) is converting only confirms
-            // the conversion. isComposing covers Chrome / Firefox / Edge;
-            // keyCode 229 covers Safari, which fires that keydown after
-            // compositionend.
-            if (evt.isComposing || evt.keyCode === 229) return;
-            evt.preventDefault();
-            sendAiChatMessage();
-        }
-
-        function askAiPreset(promptText) {
-            var input = document.getElementById("ai_chat_input");
-            if (input) {
-                input.value = promptText;
-            }
-            sendAiChatMessage();
-        }
-
-        async function sendAiChatMessage() {
-            var keyInput = document.getElementById("ai_api_key");
-            var apiKey = keyInput ? keyInput.value.trim() : "";
-            var statusDiv = document.getElementById("ai_chat_status");
-            var inputBox = document.getElementById("ai_chat_input");
-            var sendBtn = document.getElementById("btn_ai_send");
-            var userText = inputBox ? inputBox.value.trim() : "";
-            if (!userText) return;
-
-            if (!apiKey) {
-                if (statusDiv) {
-                    statusDiv.className = "ai-status error";
-                    statusDiv.textContent = "Please enter your Gemini API Key in the field above.";
-                }
-                if (keyInput) keyInput.focus();
-                return;
-            }
-
-            if (inputBox) inputBox.value = "";
-            appendChatMessage("user", userText);
-
-            var payloadText = userText;
-            if (aiChatHistory.length === 0) {
-                payloadText = (
-                    "Precomputed CausalResultsReader Snapshot (causalAnalysisSnapshot JSON):\\n```json\\n" +
-                    JSON.stringify(causalAnalysisSnapshot, null, 2) +
-                    "\\n```\\n\\nUser Question:\\n" + userText
-                );
-            }
-            aiChatHistory.push({
-                role: "user",
-                parts: [{ text: payloadText }]
-            });
-
-            var modelSel = document.getElementById("sel_ai_model");
-            var modelName = modelSel ? modelSel.value : "gemini-3.8-flash";
-            if (statusDiv) {
-                statusDiv.className = "ai-status";
-                statusDiv.textContent = "Querying " + modelName + "...";
-            }
-            if (sendBtn) sendBtn.disabled = true;
-
-            try {
-                var endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelName) + ":generateContent";
-                var resp = await fetch(endpoint, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "x-goog-api-key": apiKey
-                    },
-                    body: JSON.stringify({
-                        systemInstruction: {
-                            parts: [{ text: aiSystemInstruction }]
-                        },
-                        contents: aiChatHistory,
-                        generationConfig: {
-                            temperature: 0.2
-                        }
-                    })
-                });
-                var data = await resp.json();
-                if (!resp.ok) {
-                    aiChatHistory.pop();
-                    var errMsg = (data && data.error && data.error.message) ? data.error.message : ("HTTP " + resp.status);
-                    if (statusDiv) {
-                        statusDiv.className = "ai-status error";
-                        statusDiv.textContent = "Gemini API error: " + errMsg;
-                    }
-                } else {
-                    var candidates = (data && data.candidates) || [];
-                    var parts = (candidates[0] && candidates[0].content && candidates[0].content.parts) || [];
-                    var replyText = parts.map(function(p) { return p.text || ""; }).join("\\n").trim() || "(No response text returned)";
-                    aiChatHistory.push({
-                        role: "model",
-                        parts: [{ text: replyText }]
-                    });
-                    appendChatMessage("model", replyText);
-                    if (statusDiv) {
-                        statusDiv.className = "ai-status";
-                        statusDiv.textContent = "";
-                    }
-                }
-            } catch (err) {
-                aiChatHistory.pop();
-                if (statusDiv) {
-                    statusDiv.className = "ai-status error";
-                    statusDiv.textContent = "Network error while calling Gemini API.";
-                }
-            } finally {
-                if (sendBtn) sendBtn.disabled = false;
-            }
-        }
-
         window.onload = function() {
             updateImg001();
             if(document.getElementById('sel_002_fmt')) updateImg002();
             if(document.getElementById('sel_003_fmt')) updateImg003();
             if(document.getElementById('sel_006_trt')) { var sel = document.getElementById('sel_006_trt'); sel.onchange(); }
             if(document.getElementById('opt_metrics_007_main')) { updateImgOpt007_main(); }
-            initAiAssistantTab();
 
             var selects = document.getElementsByTagName('select');
             for(var i=0; i<selects.length; i++) {

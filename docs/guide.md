@@ -45,7 +45,7 @@ KPI, an ROI and — optionally — an optimized budget. It runs in phases:
 | Phase 1 | **Grid search**: fit a Y-model and a T-model for every candidate `ml_models_y × ml_models_t × n_folds_list`, in parallel, with FLAML AutoML choosing the hyperparameters. | yes |
 | Phase 2 | **Shortlist**: rank the candidates by *combined error* `norm_T_rmse × (norm_T_rmse + norm_Y_rmse)` (min–max normalized out-of-fold RMSEs) and keep the best `top_n`. | yes |
 | Phase 3 | **Repetitions**: re-estimate every shortlisted candidate `n_reps` times with new sample splits; the model group with the lowest combined error of its *median* RMSEs wins, and its repetitions are pooled with the median method of Chernozhukov et al. (2018) into a point estimate and a 95% band per row. | yes |
-| Phase 4 | **Consolidate & report**: CATE equation, incremental KPI, ROI, sensitivity analysis, budget optimization, charts, the HTML report and an ADK agent. | yes |
+| Phase 4 | **Consolidate & report**: CATE equation, incremental KPI, ROI, sensitivity analysis, budget optimization, charts and the HTML report. | yes |
 
 What is *not* automated is the causal design, and it is the subject of
 Chapters 1–5:
@@ -671,7 +671,7 @@ for the levers.
 | :--- | :--- | :--- |
 | `ground_truth_existence` | the data is simulated and the true effect is known | `False`; `True` for the bundled examples |
 | `ground_truth_effect_column` | per treatment, the column holding the true incremental KPI | `["TrueContrib_Discount_Total"]` |
-| `generate_html`, `generate_agent` | write the HTML report / the ADK agent | `True` (default) |
+| `generate_html` | write the HTML report | `True` (default) |
 
 ### Where things are
 
@@ -687,7 +687,6 @@ Everything goes under `output_dir`
 | `step2_shortlisted_<treatment>/` | the ranking (`2_shortlisted_models_metrics.csv`) |
 | `step3_final_<treatment>/` | repetitions (`3a_*`, `3b_*`) and `best_model/` with the pooled row-level estimates |
 | `step4_consolidated_results/` | `consolidated_1a_full_df.csv` (row level, all treatments), `consolidated_3b_summary*.csv` (totals, by geo, by item), `graph/001_total … 007_optimization`, `roi_output/<treatment>/` |
-| `agents/causal_ml_insight_agent/` | a runnable ADK agent over these files |
 
 ### The HTML report, tab by tab
 
@@ -701,7 +700,6 @@ Everything goes under `output_dir`
 | `006_sensitivity` | the Cinelli–Hazlett contour per scope and the robustness value (Chapter 8) |
 | `007_optimization` *(with `optimize=True`)* | spend, incremental KPI and ROI before/after, and the yearly matrix (Chapter 9) |
 | `roi_output_* (<treatment>)` *(non-`spend` treatments)* | amount-based ROI by month, by geo, by item and the updated priors |
-| `✨ AI Assistant (Gemini)` | asks questions about a precomputed snapshot of the results; see the [`doubleml_pipeline.agent` reference](api_reference.md#module-doubleml_pipelineagent) |
 
 ### Three numbers first
 

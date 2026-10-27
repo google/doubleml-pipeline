@@ -18,12 +18,8 @@ dependencies = [
     "patsy",
     "matplotlib",
     "cloudpickle",
-    "joblib",
-    "google-adk>=2.0.0"
+    "joblib"
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "mypy", "black", "isort"]
-
-[tool.setuptools.package-data]
-doubleml_pipeline = ["skills/**/*", "docs/output_csv_schema.md"]

@@ -15,7 +15,7 @@ presentation order. The searchable, maintained version of this content is the
 > *   `simple_optimization` defaults to `None` and a saturation-aware
 >     optimizer exists (see [Saturation DML](saturation.md)); the default
 >     `opt_threshold_roi` is `1.0`.
-> *   Phase 0 (saturation), the HTML report and the ADK agent did not exist
+> *   Phase 0 (saturation) and the HTML report did not exist
 >     yet; the Phase 4 folder is `step4_consolidated_results/` and the ROI
 >     folders are `003_roi_by_month`, `005_roi_by_item` and
 >     `007_optimization`.

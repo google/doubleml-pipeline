@@ -37,7 +37,6 @@ import pandas as pd
 from scipy import stats
 
 from . import optimization
-from .agent import generator as agent_generator
 # Phase 0 lives in `evaluation.alpha_selection`; it is aliased so that the
 # `alpha_selection` constructor argument (the config key) cannot shadow it.
 from .evaluation import alpha_selection as phase0
@@ -561,7 +560,6 @@ class CausalWorkflowOrchestrator:
       # Phase 1 / Phase 3 run then fits that fixed theta*.  "per_fold": the
       # previous behaviour (a FLAML search inside every fold).
       hparam_policy: str = DEFAULT_HPARAM_POLICY,
-      generate_agent: bool = True,
   ):
     """Initializes the central parameters for orchestration tasks."""
     # Validate parameters
@@ -873,7 +871,6 @@ class CausalWorkflowOrchestrator:
         peak_months if peak_months is not None else [3, 7, 11, 12]
     )
     self.generate_html = generate_html
-    self.generate_agent = generate_agent
 
   def _validate_columns(self, df: pd.DataFrame) -> None:
     """Checks that every user-specified column exists in ``df``.
@@ -5172,36 +5169,14 @@ class CausalWorkflowOrchestrator:
     with open(metadata_path, "w") as f:
       json.dump(metadata, f, indent=4)
 
-    report_path = None
     if self.generate_html:
       print("  ├─ Generating HTML Report...", flush=True)
       report_path = html_extraction.generate_html_report(self.output_dir)
       if report_path:
         print(f"  │    Saved: {report_path}", flush=True)
 
-    agent_dir = None
-    if self.generate_agent:
-      print("  ├─ Generating ADK Analysis Agent...", flush=True)
-      agent_dir = agent_generator.generate_agent(self.output_dir)
-      print(f"  │    Saved: {agent_dir}", flush=True)
-
     print(
         "======================================================================\n★★★"
-        " Full Pipeline Execution Finished ★★★",
+        " Full Pipeline Execution Finished ★★★\n",
         flush=True,
     )
-    if report_path or agent_dir:
-      print("\nNext Steps (Interactive AI Analysis):", flush=True)
-      if report_path:
-        print(
-            f"  - Browser (no server needed): Open {report_path} ->"
-            " 'AI Assistant (Gemini)' tab and enter a Gemini API key.",
-            flush=True,
-        )
-      if agent_dir:
-        print(
-            "  - ADK Web UI (optional):      To launch later, run"
-            f" `adk web {agent_dir.parent}` in your terminal.",
-            flush=True,
-        )
-    print("", flush=True)

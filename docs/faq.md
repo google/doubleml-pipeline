@@ -72,8 +72,7 @@ treatment), and Phases 1–4 estimate each of them. **Optimization is only
 performed for a single treatment**: with several treatments the pipeline warns
 *"Optimization with multiple treatments is not yet supported."* and runs no
 optimizer. The recommended pattern is one orchestrator (and `output_dir`) per
-treatment; `generate_agent([...])` can then build one agent over all the runs
-and compare them side by side.
+treatment.
 
 ## Errors
 
@@ -180,21 +179,3 @@ straight line (`decision_reason` is `1se_fail`, `grid_edge_upper` or
 use the raw treatment and Phase 4 runs the simple optimizer. Nothing is broken;
 see [Saturation DML](saturation.md) for the diagnostics and for how to fix the
 half-saturation point from prior knowledge.
-
-## Agents and the AI assistant
-
-### What does the in-browser AI assistant see?
-
-The HTML report embeds the precomputed outputs of the `CausalResultsReader`
-tools (overview, treatment effects, effects by segment / period, model
-diagnostics, budget optimization). `get_segment_profile`, which compares one
-free-form segment with the rest of the data, is not precomputed; the local ADK
-agent (`adk web <output_dir>/agents`) and `doubleml_pipeline.agent.Chat` have
-all tools available.
-
-### Can I use my own domain knowledge with the agent?
-
-Yes: `generate_agent(output_dir, skills_dir="./my_skills")` copies every
-sub-directory of `my_skills` that contains a `SKILL.md` into the agent — in
-place of the bundled `retail-analytics` skill, which is used when `skills_dir`
-is omitted. Regenerating the agent replaces the copied skills.

@@ -85,10 +85,8 @@ sensitivity analysis. All CSV outputs are organized under the configured
 ```
 
 Next to these folders, `<output_dir>` also contains `metadata.json` (run
-configuration), the HTML report `<treatment>_<outcome>[_<family>].html` (when
-`generate_html=True`) and
-`agents/causal_ml_insight_agent/`, a runnable ADK agent that analyzes these
-outputs (when `generate_agent=True`).
+configuration) and the HTML report `<treatment>_<outcome>[_<family>].html`
+(when `generate_html=True`).
 
 ---
 

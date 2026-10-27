@@ -25,7 +25,7 @@ pages against drifting away from the package:
   ``*`` / ``**`` markers;
 * the Python examples of the Markdown pages parse, the keyword arguments they
   pass to ``CausalWorkflowOrchestrator``, ``CausalDataScaler``,
-  ``run_full_pipeline``, ``generate_agent`` and ``create_lagged_features``
+  ``run_full_pipeline`` and ``create_lagged_features``
   exist, the README quick start passes every required argument, and the
   ``saturation_config`` examples pass the orchestrator's strict validation and
   show the real defaults;
@@ -51,7 +51,6 @@ import unittest
 
 from doubleml_pipeline import optimization
 from doubleml_pipeline import workflow
-from doubleml_pipeline.agent import generator
 from doubleml_pipeline.evaluation import alpha_selection
 from doubleml_pipeline.models import saturation
 from doubleml_pipeline.preprocessing import features
@@ -105,15 +104,9 @@ def setUpModule():  # pylint: disable=invalid-name
 
 
 # Modules whose public API must be covered by docs/api_reference.md.
-# `agent.chat` is open-source only (see BUILD) and is skipped when it cannot be
-# imported; `agent.tools.*` are implementation details of the reader.
 _DOCUMENTED_MODULES = (
     "doubleml_pipeline.workflow",
     "doubleml_pipeline.optimization",
-    "doubleml_pipeline.agent",
-    "doubleml_pipeline.agent.generator",
-    "doubleml_pipeline.agent.instruction",
-    "doubleml_pipeline.agent.results_reader",
     "doubleml_pipeline.preprocessing.scalers",
     "doubleml_pipeline.preprocessing.features",
     "doubleml_pipeline.evaluation.runner",
@@ -329,7 +322,7 @@ def _safe_getattr(obj, name):
   """`getattr(obj, name, None)` that tolerates lazily imported extras."""
   try:
     return getattr(obj, name, None)
-  except ImportError:  # e.g. `doubleml_pipeline.agent.Chat` without google.adk
+  except ImportError:
     return None
 
 
@@ -394,7 +387,7 @@ class ApiReferenceTest(unittest.TestCase):
     for module_name in _DOCUMENTED_MODULES:
       try:
         module = importlib.import_module(module_name)
-      except ImportError:  # optional dependency (e.g. agent.chat)
+      except ImportError:  # optional dependency
         continue
       for name in sorted(_public_names(module)):
         if name in _UNDOCUMENTED_ALLOWLIST:
@@ -459,7 +452,7 @@ class ApiReferenceTest(unittest.TestCase):
                 break
         if target is None:
           if name in getattr(module, "__all__", ()):
-            continue  # lazily exported optional dependency (e.g. agent.chat)
+            continue  # lazily exported optional dependency
           problems.append(f"L{line}: `{name}` is not a member of {module_name}")
           continue
       if isinstance(target, property):
@@ -547,7 +540,6 @@ class MarkdownExamplesTest(unittest.TestCase):
       "run_full_pipeline": (
           workflow.CausalWorkflowOrchestrator.run_full_pipeline
       ),
-      "generate_agent": generator.generate_agent,
       "create_lagged_features": features.create_lagged_features,
   }
 

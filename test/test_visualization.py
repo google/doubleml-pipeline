@@ -26,6 +26,9 @@
 test_sensitivity.py.
 """
 
+import json
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -747,6 +750,50 @@ class ReportFilenameTest(unittest.TestCase):
 
   def test_falls_back_when_nothing_usable(self):
     self.assertEqual(self._name([], "", None), "report.html")
+
+
+class GenerateHtmlReportTest(unittest.TestCase):
+  """``generate_html_report`` builds a self-contained HTML report."""
+
+  def test_generates_report_without_ai_assistant_tab(self):
+    """Generates the HTML report without any AI Assistant elements."""
+    with tempfile.TemporaryDirectory() as tmp:
+      with open(os.path.join(tmp, "metadata.json"), "w") as f:
+        json.dump(
+            {
+                "treatment_cols": ["tv_spend"],
+                "outcome_col": "sales",
+                "treatment_types": {"tv_spend": "spend"},
+                "x_cols_list": [["price"]],
+                "date_col": "date",
+            },
+            f,
+        )
+      step4 = os.path.join(tmp, "step4_consolidated_results")
+      os.makedirs(step4, exist_ok=True)
+      pd.DataFrame({
+          "date": ["2023-01-01", "2023-01-08"],
+          "sales": [100.0, 120.0],
+          "tv_spend": [10.0, 15.0],
+          "estimated_incremental_KPI_tv_spend": [20.0, 30.0],
+      }).to_csv(os.path.join(step4, "consolidated_1a_full_df.csv"), index=False)
+      pd.DataFrame({
+          "treatment_col": ["tv_spend", "Total"],
+          "model_group": ["lgbm_lgbm_5_2_5_0", ""],
+          "total_input": [25.0, 25.0],
+          "total_estimated_incremental_KPI": [50.0, 50.0],
+          "total_estimated_roi": [2.0, 2.0],
+      }).to_csv(os.path.join(step4, "consolidated_3b_summary.csv"), index=False)
+
+      report_path = html_extraction.generate_html_report(tmp)
+      self.assertEqual(
+          os.path.basename(report_path), "tv_spend_sales.html"
+      )
+      with open(report_path, encoding="utf-8") as f:
+        html = f.read()
+      self.assertIn("tab_001_total", html)
+      self.assertNotIn("tab_ai_assistant", html)
+      self.assertNotIn("AI Assistant", html)
 
 
 if __name__ == "__main__":

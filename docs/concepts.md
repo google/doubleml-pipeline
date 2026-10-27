@@ -139,7 +139,7 @@ business before choosing variables is time well spent.
 | how each column is scaled (`CausalDataScaler`) | cross-fitting, repetitions and the empirical confidence band |
 | covariates for heterogeneity (`covariates_for_cate_list`) | ranking and shortlisting of candidate models |
 | which diagnostics to run (`run_sensitivity`, ground truth columns) | cluster-robust inference (2-way Cluster DML keys chosen automatically) |
-| whether to model saturation (`saturation_config`) and optimize (`optimize`) | descaling back to business units, charts, CSVs, the HTML report and the AI agent |
+| whether to model saturation (`saturation_config`) and optimize (`optimize`) | descaling back to business units, charts, CSVs and the HTML report |
 
 ## 8. Glossary
 
