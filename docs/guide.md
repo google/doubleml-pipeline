@@ -701,7 +701,7 @@ Everything goes under `output_dir`
 | `006_sensitivity` | the Cinelli–Hazlett contour per scope and the robustness value (Chapter 8) |
 | `007_optimization` *(with `optimize=True`)* | spend, incremental KPI and ROI before/after, and the yearly matrix (Chapter 9) |
 | `roi_output_* (<treatment>)` *(non-`spend` treatments)* | amount-based ROI by month, by geo, by item and the updated priors |
-| `✨ AI Assistant (Gemini)` | asks questions about a precomputed snapshot of the results; see [Analyzing results with AI](../README.md#analyzing-results-with-ai-browser-chat-or-adk-agent) |
+| `✨ AI Assistant (Gemini)` | asks questions about a precomputed snapshot of the results; see the [`doubleml_pipeline.agent` reference](api_reference.md#module-doubleml_pipelineagent) |
 
 ### Three numbers first
 

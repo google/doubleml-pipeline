@@ -44,7 +44,6 @@ refers to and builds upon the underlying `DoubleML` Python package published by
 *   [How to read the results](#how-to-read-the-results)
 *   [How it works](#how-it-works)
 *   [Features](#features)
-*   [Analyzing results with AI](#analyzing-results-with-ai-browser-chat-or-adk-agent)
 *   [Documentation](#documentation)
 *   [Community](#community) · [License](#license) · [Citation](#citation)
 
@@ -88,9 +87,8 @@ selection, repetitions, confidence bounds and diagnostics. The
 
 Most DML libraries give you the estimator; you bring the learners, the tuning,
 the repetitions, the diagnostics and the reporting. `doubleml-pipeline` wraps
-all of those steps into one call and adds two capabilities built for marketing
-data: a saturation-aware treatment model and an agentic AI layer on top of the
-estimates.
+all of those steps into one call and adds a capability built for marketing
+data: a saturation-aware treatment model.
 
 ### An end-to-end, automated pipeline
 
@@ -105,7 +103,7 @@ every step that is usually hand-written notebook code:
 | Inference | 2-way Cluster DML whose keys are chosen automatically from item, geo and a date block | `geo_col`, `item_col`, `date_col` |
 | Business units | scaled inputs are descaled exactly, so incremental KPI and ROI come back in real-world units | `CausalDataScaler` |
 | Diagnostics | ground-truth comparison on simulated data and OVB sensitivity analysis with robustness values and benchmark covariates | `run_sensitivity`, `ground_truth_existence` |
-| Outputs | CSVs for every phase, charts, a self-contained HTML report, `metadata.json` and a runnable agent | `output_dir` |
+| Outputs | CSVs for every phase, charts, a self-contained HTML report and `metadata.json` | `output_dir` |
 
 Details: [How it works](#how-it-works) and
 [Advanced configuration & internals](docs/advanced.md).
@@ -125,31 +123,6 @@ the data cannot pin the curve down. Enabling it is a one-key change
 [Read more →](docs/saturation.md)
 
 ![Fitted saturation curve of a treatment, normalized through the reference point (T_ref, 1), with the 1-SE envelope and the identity candidate](img/hero_saturation.png)
-
-### Agentic AI on top of the estimates
-
-Every run ships with two ways to interrogate the results with Gemini, both
-built on the same `CausalResultsReader` tools that read the pipeline outputs
-and do the arithmetic deterministically — the LLM interprets DoubleML
-estimates, it never computes causal effects itself — and both carrying domain
-knowledge as [Agent Skills](https://agentskills.io) (bundled:
-`retail-analytics`):
-
-*   **In the browser, lightweight** — the HTML report has an
-    `✨ AI Assistant (Gemini)` tab. It needs nothing but a Gemini API key: the
-    report embeds the precomputed tool outputs (effects with intervals, ROI
-    verdicts, breakdowns by region / product / period, diagnostics, budget
-    optimization) and answers summary questions from them.
-*   **In Python or Colab, full access** — the generated
-    [ADK](https://google.github.io/adk-docs/) agent (`adk web`) and the
-    notebook helper `doubleml_pipeline.agent.Chat` run all six tools live
-    against the Phase 4 CSVs: any segment, cross-tabulation, date window or
-    sort order, the profile of a single store or product, and several runs
-    compared side by side.
-
-[Read more →](#analyzing-results-with-ai-browser-chat-or-adk-agent)
-
-![The AI Assistant tab of the HTML report: API key, model choice, suggested questions and the chat](img/hero_agent.png)
 
 --------------------------------------------------------------------------------
 
@@ -330,13 +303,11 @@ Every run writes to `output_dir`:
 *   **The HTML report** `<treatment>_<outcome>[_<family>].html` (for example
     `discount_rate_sales_revenue.html`; several treatments are joined with `-`,
     and `_<family>` is appended only when saturation is enabled) — one
-    self-contained file with every chart, the summary tables and an AI
-    assistant tab.
+    self-contained file with every chart and the summary tables.
 *   **CSV files** for every phase, documented in the
     [Output CSV Schema](docs/output_csv_schema.md). The consolidated results live
     in `step4_consolidated_results/`.
-*   `metadata.json` with the run configuration and, by default, a runnable ADK
-    agent under `agents/`.
+*   `metadata.json` with the run configuration.
 
 Three numbers answer most questions:
 
@@ -375,7 +346,7 @@ Phase 2             Shortlist: rank the candidates by combined error, keep top_n
 Phase 3             Repetitions: re-estimate the shortlist n_reps times and build
                     a weighted ensemble with empirical 2.5-97.5% bounds
 Phase 4             Consolidate & report: CATE, incremental KPI, ROI, sensitivity
-                    analysis, budget optimization, charts, HTML report, agent
+                    analysis, budget optimization, charts, HTML report
 ```
 
 When the pipeline runs, it saves all intermediate evaluation metrics, candidate
@@ -421,80 +392,7 @@ once per treatment and learner (`hparam_policy="global"`). Both are described in
     (mind that CATE varies with conditions such as seasonality, and that MMM
     estimates an ATE while DML reports a CATE).
 *   **Reports** — CSVs ([schema](docs/output_csv_schema.md)), publication-ready
-    charts, a self-contained HTML report, and an ADK agent plus an in-browser
-    Gemini chat to interrogate the results.
-
---------------------------------------------------------------------------------
-
-## Analyzing results with AI (Browser Chat or ADK Agent)
-
-There are two ways to explore the causal estimates with Gemini. Both use the
-same `CausalResultsReader` tools and the same bundled skills; they differ in
-what the tools can reach.
-
-| | In the browser (lightweight) | In Python or Colab (full access) |
-| :--- | :--- | :--- |
-| How | `✨ AI Assistant (Gemini)` tab of the HTML report | `adk web` on the generated agent, or `Chat` / `ask` in a notebook |
-| Needs | the HTML file and a Gemini API key | Python with `doubleml-pipeline` (and `google-adk`) installed |
-| Data the model sees | the outputs of the tools, **precomputed** at report time with their default arguments (effects with intervals, ROI vs. threshold, breakdowns by region / product / period and CATE covariate — up to 50 rows each, model diagnostics, budget optimization) | the tools run **live** against the Phase 4 CSVs with any arguments |
-| Good for | executive summaries, "which treatment pays back", "where and when does it work" | drill-downs: arbitrary segments, cross-tabulations, date windows, sort orders, the profile of one store or product (`get_segment_profile`), comparisons across several runs |
-
-1. **Directly in the HTML report (no server required)**: Open
-   `<output_dir>/<treatment>_<outcome>[_<family>].html` in your browser,
-   select the **`✨ AI Assistant (Gemini)`** tab, and enter a Gemini API Key
-   to chat with the precomputed `CausalResultsReader` outputs and the bundled
-   `retail-analytics` skill. The tab shows the exact JSON the model receives
-   (*Inspect Precomputed CausalResultsReader Snapshot*).
-2. **Local [ADK](https://google.github.io/adk-docs/) Agent (`generate_agent=True`)**:
-   By default, the pipeline also writes a runnable ADK agent to
-   `<output_dir>/agents/causal_ml_insight_agent/`. The agent answers business
-   questions such as "Which promotion pays back, where, and when?" from the
-   pipeline outputs. Its tools read the results and do the arithmetic
-   deterministically, so the LLM interprets the DoubleML estimates instead of
-   computing causal effects itself. The domain knowledge comes from
-   [Agent Skills](https://agentskills.io) bundled in
-   [`skills/`](skills/), starting with `retail-analytics`. Coding agents can use
-   these skills directly too.
-
-```bash
-cp causal_results/agents/causal_ml_insight_agent/.env.example \
-   causal_results/agents/causal_ml_insight_agent/.env  # Set your project.
-adk web causal_results/agents
-```
-
-3. **In a notebook (Colab or Jupyter)**: the same agent, without a server.
-   `Chat` keeps the conversation and renders an interactive widget with
-   `chat.ui()`; `ask` answers a single question.
-
-```python
-from doubleml_pipeline.agent import Chat
-
-chat = Chat("./causal_results", api_key="YOUR_GEMINI_API_KEY")
-chat.ui()  # or: await chat.ask("Which promotion pays back, where, and when?")
-```
-
-To regenerate the agent with your own skills or model, or to add one to the
-results of an earlier run:
-
-```python
-from doubleml_pipeline.agent import generate_agent
-
-generate_agent("./causal_results", skills_dir="./my_skills")
-```
-
-If you run one orchestrator per channel, one agent can cover all of the runs.
-It compares the channels side by side but never adds their effects up, since
-each run is estimated separately:
-
-```python
-from doubleml_pipeline.agent import generate_agent
-
-generate_agent(
-    ["results/Spend_TV", "results/Spend_Digital", "results/Spend_Flyer"],
-    output_dir="results",
-)
-# adk web results/agents
-```
+    charts and a self-contained HTML report.
 
 --------------------------------------------------------------------------------
 
