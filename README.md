@@ -19,7 +19,7 @@ sensitivity checks and reporting.
 refers to and builds upon the underlying `DoubleML` Python package published by
 [doubleml.org](https://docs.doubleml.org).*
 
-![The HTML report of a run on simulated retail data: total incremental KPI and ROI of a discount, model metrics and the incremental-KPI time series with its 95% band](img/hero_total.png)
+![The HTML report of a run on simulated retail data: total incremental KPI and ROI of a discount, model metrics and the incremental-KPI time series with its 95% band](img/hero_total_v2.png)
 
 *   📦 `pip install doubleml-pipeline`
 *   🚀 [Quick start](#quick-start) — a dozen lines of code
