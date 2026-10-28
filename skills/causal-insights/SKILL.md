@@ -1,5 +1,5 @@
 ---
-name: doubleml-causal-insights
+name: causal-insights
 description: >-
   Interprets completed doubleml-pipeline output directories across treatments,
   outcome KPIs, entity dimensions (geo_col, item_col), calendar periods, and

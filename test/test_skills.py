@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the bundled doubleml-causal-insights Agent Skill and formulas."""
+"""Tests for the bundled causal-insights Agent Skill and formulas."""
 
 import ast
 import importlib.util
@@ -72,14 +72,14 @@ def _find_skills_dir() -> pathlib.Path | None:
   )
   for candidate in candidates:
     skills_dir = candidate / "skills"
-    if (skills_dir / "doubleml-causal-insights" / "SKILL.md").is_file():
+    if (skills_dir / "causal-insights" / "SKILL.md").is_file():
       return skills_dir
   return None
 
 
 _SKILLS_DIR = _find_skills_dir()
 _SKILL_DIR = (
-    (_SKILLS_DIR / "doubleml-causal-insights")
+    (_SKILLS_DIR / "causal-insights")
     if _SKILLS_DIR is not None
     else pathlib.Path()
 )
@@ -185,7 +185,7 @@ def _load_formulas_module(tmp_dir: pathlib.Path) -> ModuleType:
 
 @unittest.skipIf(_SKILLS_DIR is None, "skills/ directory is not available")
 class BundledSkillStructureTest(unittest.TestCase):
-  """Agent Skills specification compliance for Claude Code, Codex, Antigravity."""
+  """Agent Skills specification compliance for the bundled skill."""
 
   def test_frontmatter_and_length(self):
     skill_md = _SKILL_DIR / "SKILL.md"

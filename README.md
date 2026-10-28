@@ -333,14 +333,12 @@ the ROI breakdowns under `roi_output/<treatment>/` — and run the validation
 checks (ignorability, heterogeneity, positivity) described in the
 [User Guide](docs/guide.md) before acting on the numbers.
 
-### Analyzing results with coding agents (Claude Code, Codex, Antigravity)
+### Analyzing results with AI agents
 
 The repository bundles a lightweight Agent Skill
-([`skills/doubleml-causal-insights`](skills/doubleml-causal-insights/SKILL.md))
-that teaches **Claude Code**, **Codex**, and **Antigravity** (as well as ADK
-`SkillToolset` agents) how to read any completed `output_dir` with exact metric
-definitions
-([`metric_formulas.md`](skills/doubleml-causal-insights/references/metric_formulas.md)),
+([`skills/causal-insights`](skills/causal-insights/SKILL.md)) that teaches AI
+agents how to read any completed `output_dir` with exact metric definitions
+([`metric_formulas.md`](skills/causal-insights/references/metric_formulas.md)),
 causal interpretation rules, diagnostics checks, and mandatory
 **Fact / Inference / Hypothesis** tagging. No extra dependencies beyond Python,
 `numpy`, and `pandas` are required.
@@ -351,13 +349,7 @@ Install from GitHub with the Agent Skills CLI:
 npx skills add google/doubleml-pipeline
 ```
 
-Or copy/symlink `skills/doubleml-causal-insights` directly into your project:
-
-*   **Claude Code:** `.claude/skills/doubleml-causal-insights`
-*   **Codex:** `.agents/skills/doubleml-causal-insights` (or `.codex/skills/doubleml-causal-insights`)
-*   **Antigravity:** `.agents/skills/doubleml-causal-insights` (or `.agent/skills/doubleml-causal-insights`)
-
-Then ask your coding agent, for example:
+Then ask your agent, for example:
 *"Analyze `./causal_results` and summarize which treatments paid back, where and
 when they worked best, whether the estimates pass diagnostics, and how budget
 should shift."*
@@ -423,10 +415,9 @@ once per treatment and learner (`hparam_policy="global"`). Both are described in
 *   **Reports** — CSVs ([schema](docs/output_csv_schema.md)), publication-ready
     charts and a self-contained HTML report.
 *   **Agent Skills** —
-    [`skills/doubleml-causal-insights`](skills/doubleml-causal-insights/SKILL.md)
-    equips Claude Code, Codex and Antigravity with pipeline-accurate metric
-    formulas, causal trust checks and a structured report template over any
-    `output_dir`.
+    [`skills/causal-insights`](skills/causal-insights/SKILL.md) equips AI agents
+    with pipeline-accurate metric formulas, causal trust checks and a structured
+    report template over any `output_dir`.
 
 --------------------------------------------------------------------------------
 
