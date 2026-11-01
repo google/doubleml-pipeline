@@ -19,7 +19,7 @@ sensitivity checks and reporting.
 refers to and builds upon the underlying `DoubleML` Python package published by
 [doubleml.org](https://docs.doubleml.org).*
 
-![The HTML report of a run on simulated retail data: total incremental KPI and ROI of a discount, model metrics and the incremental-KPI time series with its 95% band](img/hero_total_v2.png)
+![The HTML report of a run on simulated retail data: total incremental KPI and ROI of a discount, model metrics and the incremental-KPI time series with its 95% band](docs/img/hero_total_v2.png)
 
 *   📦 `pip install doubleml-pipeline`
 *   🚀 [Quick start](#quick-start) — a dozen lines of code
@@ -122,7 +122,7 @@ the data cannot pin the curve down. Enabling it is a one-key change
 (`saturation_config={"saturation": {"family": "tanh"}}`).
 [Read more →](docs/saturation.md)
 
-![Fitted saturation curve of a treatment, normalized through the reference point (T_ref, 1), with the 1-SE envelope and the identity candidate](img/hero_saturation.png)
+![Fitted saturation curve of a treatment, normalized through the reference point (T_ref, 1), with the 1-SE envelope and the identity candidate](docs/img/hero_saturation.png)
 
 --------------------------------------------------------------------------------
 
@@ -374,7 +374,7 @@ When the pipeline runs, it saves all intermediate evaluation metrics, candidate
 model repetitions, consolidated datasets, and visualization plots within the
 specified `output_dir` (e.g., `./causal_results/`) as shown below:
 
-![Output Directory Structure](img/output_directory_structure.png)
+![Output Directory Structure](docs/img/output_directory_structure.png)
 
 The cross-fitting folds and the standard errors use a **2-way Cluster DML**
 whose keys are chosen automatically from `item_col`, `geo_col` and a date block
@@ -435,7 +435,7 @@ once per treatment and learner (`hparam_policy="global"`). Both are described in
 | [Slides](docs/slides.md) | you want the original slide deck of the User Guide (one image per slide) for a presentation |
 | Example notebooks: [`IN_skincare`](examples/IN_skincare/doubleml-pipeline_sample_notebook_IN.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/doubleml-pipeline/blob/main/examples/IN_skincare/doubleml-pipeline_sample_notebook_IN.ipynb), [`JP_retailer`](examples/JP_retailer/doubleml-pipeline_sample_notebook_JP.ipynb) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/doubleml-pipeline/blob/main/examples/JP_retailer/doubleml-pipeline_sample_notebook_JP.ipynb) | you want an end-to-end run — loading realistic simulated panel data, engineering lagged features, scaling, running the pipeline and plotting the results (a single discount-rate treatment in `IN_skincare`; multi-treatment, lagged flyer spend and a custom CATE formula in `JP_retailer`) |
 
-[![DML checklist from the User Guide](img/guide_38.png)](docs/guide.md#10-checklist)
+[![DML checklist from the User Guide](docs/img/guide_38.png)](docs/guide.md#10-checklist)
 
 --------------------------------------------------------------------------------
 

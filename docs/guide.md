@@ -193,7 +193,7 @@ paths. Media `M`, search `S` and distribution `O` are predictors of sales in
 this design; an unobserved confounder `U` (red, dashed) is what the
 sensitivity analysis of Chapter 8 is about.
 
-![Causal graph of the skincare example: confounders C, latent confounder U, media M, search S, treatment T (discount %), distribution O and sales R](../img/guide_09.png)
+![Causal graph of the skincare example: confounders C, latent confounder U, media M, search S, treatment T (discount %), distribution O and sales R](img/guide_09.png)
 
 *Confounders in the example: `Seasonality`, `Category_Sales`,
 `actual_holiday`, `actual_category_peak`. Predictors: `TV_Grps`, `OLV_1_Imps`,
@@ -204,7 +204,7 @@ online event and the outcome is this week's offline sales, seasonality in
 *every* earlier week influences both — including them (or a seasonality
 index that summarizes them) is what blocks the paths:
 
-![Time-unrolled graph: seasonality at t-6 … t opens back-door paths into the treatment at t and the outcome at t](../img/guide_10.png)
+![Time-unrolled graph: seasonality at t-6 … t opens back-door paths into the treatment at t and the outcome at t](img/guide_10.png)
 
 ### Multicollinearity: check the VIF
 
@@ -246,7 +246,7 @@ unusable: a single week in late November 2021 produced an incremental KPI
 spike of about −1.6 × 10⁸ against a ground truth near zero (SMAPE 89%,
 R² = −131).
 
-![Estimate with 28 confounders: one extreme negative spike dominates the series](../img/guide_39.png)
+![Estimate with 28 confounders: one extreme negative spike dominates the series](img/guide_39.png)
 
 **Step 2 — drop VIF > 10.** Removing `GDP`, `Gdp_Per_Capita`, `Population`,
 `CPI`, `OS_Generic_GTs` and `OS_Retail_GTs` brought every VIF below 5 (max
@@ -254,7 +254,7 @@ R² = −131).
 ≈ −2.2 × 10⁸). A clean VIF table is necessary, not sufficient: 22
 predictors on 134 weeks still over-fit the nuisance models.
 
-![Estimate after removing the high-VIF columns: the spike is still there](../img/guide_41.png)
+![Estimate after removing the high-VIF columns: the spike is still there](img/guide_41.png)
 
 **Step 3 — keep the confounders, narrow the predictors.** The final list keeps
 all four confounders of the graph, the three largest media channels and the
@@ -276,7 +276,7 @@ y_col = "Revenue_Sales"
 The estimate now tracks the ground truth (R² = 0.54, SMAPE 80% on a series
 that is mostly zero, no spikes):
 
-![Estimate with the 8-variable list: the estimated incremental KPI follows the ground truth](../img/guide_40.png)
+![Estimate with the 8-variable list: the estimated incremental KPI follows the ground truth](img/guide_40.png)
 
 > [!TIP]
 > **Rule of thumb.** Include every confounder whose VIF is acceptable; keep
@@ -421,7 +421,7 @@ the variable itself (a linear term). Three numbers describe a B-spline:
 *   `degree` — the polynomial degree of each piece (2 = quadratic by default);
 *   knots — where the pieces join; `knots = df − degree` (1 by default).
 
-![Concept of B-spline regression: the target function is approximated by a weighted sum of a finite number of basis functions](../img/guide_15.png)
+![Concept of B-spline regression: the target function is approximated by a weighted sum of a finite number of basis functions](img/guide_15.png)
 
 The default `auto_additive` structure is therefore
 `bs(x, df=3, degree=2, include_intercept=False)` for every continuous
@@ -435,7 +435,7 @@ conservative on purpose.
 with a dozen covariates the design has sixty columns and the curse of
 dimensionality takes over.
 
-![Stable CATE with one covariate (5 parameters) versus an unstable one with twelve covariates (60 parameters)](../img/guide_16.png)
+![Stable CATE with one covariate (5 parameters) versus an unstable one with twelve covariates (60 parameters)](img/guide_16.png)
 
 > **Rule of thumb:** limit the CATE covariates to about **1–10**, depending
 > on the sample size.
@@ -443,7 +443,7 @@ dimensionality takes over.
 **2. Too many knots.** More knots means more local flexibility and wider
 bands.
 
-![Stable CATE with 2 knots versus an unstable one with 23 knots](../img/guide_17.png)
+![Stable CATE with 2 knots versus an unstable one with 23 knots](img/guide_17.png)
 
 > **Rule of thumb:** **0–1 knot** is appropriate for promotional spend on
 > aggregated data.
@@ -451,7 +451,7 @@ bands.
 **3. A degree that is too high.** High-degree pieces oscillate, especially at
 the edges of the covariate range.
 
-![Stable CATE with degree 2 versus an unstable one with degree 9](../img/guide_18.png)
+![Stable CATE with degree 2 versus an unstable one with degree 9](img/guide_18.png)
 
 > **Rule of thumb:** a **degree of 1–2**.
 
@@ -459,7 +459,7 @@ the edges of the covariate range.
 two continuous covariates) multiplies the parameter count and, in the
 simulation, inflated the confidence band fifteen-fold.
 
-![Additive spline (stable) versus a 4-D tensor-product spline (15x wider band)](../img/guide_19.png)
+![Additive spline (stable) versus a 4-D tensor-product spline (15x wider band)](img/guide_19.png)
 
 > **Rule of thumb:** use the **additive** form unless you are highly confident
 > in the functional form; interact a spline with *binary* flags only.
@@ -720,7 +720,7 @@ treatment in `ground_truth_effect_column`. The charts then overlay the truth
 (blue dashed) and print SMAPE, R², MAE and RMSE of the estimate against it,
 overall and per geo/item (`consolidated_3b_summary*.csv`):
 
-![Total incremental KPI time series with the ground truth overlaid and the accuracy metrics box](../img/guide_26.png)
+![Total incremental KPI time series with the ground truth overlaid and the accuracy metrics box](img/guide_26.png)
 
 Use these runs to tune Chapters 2–5 *before* running on real data: a
 variable list that cannot recover a simulated effect will not recover a real
@@ -733,7 +733,7 @@ For `percentage`, `impressions` and `price` treatments with a spend mapping,
 incremental sales as % of sales and ROI by month (peak months highlighted) and
 by geo, plus the updated prior distributions:
 
-![ROI by month, ROI by geo and the fitted prior distributions of the skincare run](../img/guide_30.png)
+![ROI by month, ROI by geo and the fitted prior distributions of the skincare run](img/guide_30.png)
 
 --------------------------------------------------------------------------------
 
@@ -795,7 +795,7 @@ plt.show()
 In the skincare run one geo stood out: Delhi NCR's ROI was negative in every
 week while the other five regions were near or above break-even.
 
-![Box plot of the discount ROI by geography: Delhi NCR is entirely below break-even](../img/guide_35.png)
+![Box plot of the discount ROI by geography: Delhi NCR is entirely below break-even](img/guide_35.png)
 
 Such an outlier is a prompt, not a conclusion. Check whether the segment is
 structurally different (different channel mix, different promotion
@@ -826,7 +826,7 @@ fig.supylabel("Seasonality")
 plt.show()
 ```
 
-![KDE heat map of seasonality versus discount % per geo: dense cores at low seasonality and isolated islands near seasonality 1.0](../img/guide_36.png)
+![KDE heat map of seasonality versus discount % per geo: dense cores at low seasonality and isolated islands near seasonality 1.0](img/guide_36.png)
 
 In the example the mass sits at `Seasonality ≤ 0.4`; the weeks near
 `Seasonality ≈ 1.0` (the annual mega sales) are a handful of points per geo.
@@ -834,7 +834,7 @@ The consequence is visible in the per-geo time series: the confidence band
 of Delhi NCR explodes in exactly those weeks (November/December 2021,
 October/November 2022):
 
-![Delhi NCR incremental KPI: the 95% band widens dramatically in the mega-sale weeks](../img/guide_37.png)
+![Delhi NCR incremental KPI: the 95% band widens dramatically in the mega-sale weeks](img/guide_37.png)
 
 Remedies: more periods, more geos/items with the same context, a coarser CATE
 (drop the covariate that singles out the rare context), or state explicitly
@@ -896,7 +896,7 @@ See [Optimization modes](advanced.md#optimization-modes).
 The simple optimizer answers "which weeks and regions lose money at this
 discount?" and is a deliberate business compromise, not an optimum:
 
-![Total time series with ROI optimization at threshold 0: spend, estimated incremental sales and the reduced spend](../img/guide_32.png)
+![Total time series with ROI optimization at threshold 0: spend, estimated incremental sales and the reduced spend](img/guide_32.png)
 
 Its output, `graph/007_optimization/optimization_metrics.csv` (or
 `roi_output/<treatment>/007_optimization/` for non-spend treatments), has one
