@@ -23,9 +23,124 @@ configured `treatment_types` (default is `"spend"`), along with
 | `"percentage"`, `"impressions"`, or `"price"` | **Missing** | **Skipped (Warning)** | Pipeline logs a warning and skips ROI charts because monetary spend mapping is missing. |
 
 > [!NOTE]
-> When setting `treatment_types` to `"price"`, "price" should refer to the
-> difference between the current price and a benchmark price (for example,
-> `price = maximum price - current price`).
+> A `"price"` treatment is estimated as the **gap** between a benchmark price
+> and the observed price, not as the price itself; the pipeline builds the
+> gap (and the price investment the ROI is computed against) from the
+> `benchmark` entry of `treatment_types`. See
+> [Price treatments](#price-treatments-benchmark-gap-and-price-investment).
+
+## Price treatments: benchmark, gap and price investment
+
+The incremental KPI of a row is `θ(X) × D`, i.e. the effect of the treatment
+against the counterfactual `D = 0`. With a raw price as `D` that
+counterfactual is a price of zero — far outside the data — and the
+"incremental" KPI is a linear extrapolation of the size of the sales
+themselves. A `"price"` treatment is therefore estimated as the gap
+
+`D_{g,t} = b_{g,t} − p_{g,t}`
+
+between a **benchmark price** `b` and the observed price `p`, so that `D = 0`
+means "sold at the benchmark price". Vocabulary used below:
+
+| Term | Definition |
+| :--- | :--- |
+| group `g` | the rows with the same `item_col` and `geo_col` values (one of them when only one is set; all rows when neither is set, with a warning) |
+| `p_{g,t}` | the price of group `g` at date `t` (the treatment column as given) |
+| `b_{g,t}` | the benchmark price of that row |
+| `D_{g,t}` | `b_{g,t} − p_{g,t}`, the gap — the treatment Phases 0–4 estimate |
+| `U_{g,t}` | `sales_{g,t} / p_{g,t}`, the quantity sold (`sales_col`) |
+| `C_{g,t}` | `U_{g,t} × max(D_{g,t}, 0)`, the price investment (the ROI cost) |
+
+### Setting the benchmark
+
+The benchmark is configured inside `treatment_types`; a `"price"` entry may
+be the plain string or a dict with a `benchmark` (and, for `rolling_max`, a
+`window`) key. The key is the **treatment column as listed in `d_cols`**, not
+the word `price` (for a price column `UnitPriceSM`:
+`{"UnitPriceSM": {"type": "price", "benchmark": "q_95"}}`); a key that is not
+in `d_cols` raises `ValueError` at construction, because it would otherwise
+be ignored and the column estimated as a plain `spend` treatment. A lag
+`<d>_l<n>` listed in `d_cols` needs its own entry (see *Lags* below).
+
+```python
+treatment_types = {
+    "tv_spend": "spend",
+    "price": {"type": "price", "benchmark": "q_95"},
+}
+```
+
+| `benchmark` | Meaning |
+| :--- | :--- |
+| *(omitted, or the plain string `"price"`)* | **Automatic**: a column whose smallest non-NaN value is `<= 0` cannot be a price and is taken to be a gap already (`as_is`); otherwise the group maximum `q_100` is used. The decision is announced with a `UserWarning` and recorded in `metadata.json`. |
+| `"as_is"` | The column already is `D` (for example `list_price − price` computed by the caller); nothing is transformed. |
+| `"q_k"`, `k` an integer in `1…100` | The `k`-th percentile of the prices of the group, taken as the **smallest observed price at or above the percentile** (`np.quantile(..., method="higher")`), so `b` is always a price that occurred and every group has at least one row with `D = 0`. `q_100` is the group maximum; it is the only quantile with `D >= 0` on every row. |
+| `"rolling_max"` with `"window": "<n>W"` or `"<n>D"` | `b_{g,t} = max{ p_{g,s} : t − W < s <= t, (g, s) observed }` — the maximum price of the group over the calendar window of length `W` (`n` weeks or days) **ending at and including the row's own date**, so `D >= 0` always. The first observed date of a group has `D = 0` (its window holds that date only); missing dates are simply absent from the window. Requires `date_col`. |
+| a number | A constant benchmark price (must be `> 0`). |
+| any other string | The name of a column holding the benchmark price (a list price, for example). It must exist in `df`; a column named like one of the keywords above (`as_is`, `rolling_max`, `q_<k>`) is rejected. |
+
+### What the pipeline does with a price treatment
+
+At the start of `run_full_pipeline`, right after the column check and before
+anything else:
+
+1.  `<d>_benchmark` (`b`) and `<d>_gap` (`D`) are added to a copy of `df` (the
+    caller's frame is not modified) and the treatment is **renamed** to
+    `<d>_gap` in `d_cols`, `treatment_types` and `treatment_spend_cols`: every
+    output (`estimated_incremental_KPI_<d>_gap`, the charts, the summaries,
+    `metadata.json["treatment_cols"]`) carries the gap's name. `as_is` leaves
+    the treatment unchanged.
+2.  `<d>_benchmark` is appended to the treatment's `x_cols` (logged; not for a
+    constant benchmark, which carries no information). It is **not** added to
+    `covariates_for_cate`. The price level is thereby controlled for, which
+    is what makes the absolute gap comparable across items. Never put the
+    price column itself in `x_cols`: with `D = b − p`, `p` determines `D`
+    exactly and the treatment residual vanishes.
+3.  The **price investment** `<d>_investment` is created and becomes the
+    treatment's `treatment_spend_cols` entry:
+    *   with `treatment_spend_cols[d]` given by the caller, that column with
+        its value replaced by `0` on the rows where `D <= 0`;
+    *   otherwise, when `sales_col` is set and the benchmark is not `as_is`,
+        `C = sales_col / p × max(D, 0)` (rows with NaN sales get `0`; a price
+        `<= 0` raises `ValueError`, because the quantity is undefined). This
+        presumes `sales_col` to be the sales **amount** of the same item, geo
+        and date at price `p`; if your `sales_col` is a quantity, pass
+        `treatment_spend_cols` instead;
+    *   otherwise no investment column exists and Phase 4 skips the ROI
+        output and the optimization of the treatment with the usual warning.
+4.  **Lags.** A treatment `<d>_l<n>` (as built by `create_lagged_features`)
+    is a lag of a price column: its benchmark is computed from the base
+    column `<d>` (which must be in `df`; all lags of one column must agree on
+    the benchmark) and its gap `<d>_gap_l<n>` is the gap of the same group
+    `n` periods earlier — benchmark and price both taken at the earlier date —
+    with `0` where that row does not exist. The investment is shifted the
+    same way (unless `treatment_spend_cols` names a column for the lag).
+    Requires `date_col`. Each lag needs its own `treatment_types` entry
+    (e.g. `{"price": {...}, "price_l1": "price"}`); a lag without one whose
+    base column is a `price` treatment raises `ValueError` at construction.
+5.  If the price column is listed in one of the scaler's column lists
+    (`standardize_cols`, …), `<d>_gap` and `<d>_benchmark` are added to the
+    same list, so the treatment is scaled the way the caller intended.
+6.  The benchmark values are written to `price_benchmark/<d>_benchmark.csv`
+    (one row per group, or per group and date for `rolling_max` and column
+    benchmarks) and `metadata.json["price_benchmarks"]` records, per gap
+    column, the specification and how it was resolved (`auto` / `explicit`),
+    the benchmark column, the group columns, the numbers of rows with
+    `D = 0` and `D < 0`, and the investment column with its source
+    (`user` / `auto` / `none`) and formula. The header of the HTML report
+    repeats the benchmark (and window) next to the treatment type and the
+    origin of the investment column next to the spend column.
+
+### Rows with `D < 0`
+
+They occur only with `as_is`, a column or constant benchmark, or `q_k` with
+`k < 100` (a price above the benchmark). Such a row **keeps its negative gap
+in the estimation**: its `estimated_incremental_KPI` is `θ(X) × D` (or
+`θ(X) × f̄(D)` under a saturation family), whose sign is that of `θ(X)`. With
+a saturation family the curve is extended to negative values as an odd
+function, `f(D) = −f(−D)`, in Phase 0 (α selection) and Phases 1–3 alike.
+In the ROI output and the optimization the row counts as **zero
+investment** (`C = 0`). The number of such rows is reported with a
+`UserWarning` and in `metadata.json`.
 
 ## Optimization modes
 
@@ -47,8 +162,13 @@ Two modes are available:
 > budgets the treatment column directly and that is only money when the
 > treatment *is* spend. Phases 0–3 still use saturation for these
 > treatments; only the Phase 4 optimizer is the simple one. The value in
-> force is reported in `metadata.json["simple_optimization"]` and in the
-> header of the HTML report (`Simple Optimization: True/False`).
+> force is reported in `metadata.json["simple_optimization"]` (the user's
+> selection in `simple_optimization_requested`, the derived value in
+> `simple_optimization_derived` and the forcing in
+> `simple_optimization_forced`) and in the header of the HTML report
+> (`Simple Optimization: user selection: … | final decision: …`, where the
+> final decision says whether the simple optimizer ran — also `True` through
+> the Phase 4 linear fallback, which is then named).
 
 > [!NOTE]
 > `simple_optimization` defaults to `None`, meaning "derive it from whether

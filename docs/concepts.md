@@ -106,7 +106,14 @@ the number you see in the charts, with the repetition band around it.
 **ROI** divides the incremental KPI by what the treatment cost. For a `spend`
 treatment the cost is the treatment itself; for a `percentage`, `impressions`
 or `price` treatment you name the monetary column (`treatment_spend_cols`) and
-the sales column (`sales_col`). The pipeline compares the ROI with a threshold
+the sales column (`sales_col`). A `price` treatment is a special case: the
+pipeline estimates the *gap* between a benchmark price (the regular price of
+the item, by default its maximum) and the observed price — so that "without
+the treatment" means "sold at the regular price", not "given away for free" —
+and, when you give no cost column, builds the price investment
+`quantity × gap` from `sales_col` itself (see
+[Price treatments](advanced.md#price-treatments-benchmark-gap-and-price-investment)).
+The pipeline compares the ROI with a threshold
 (`opt_threshold_roi`, default `1.0`) and, if asked (`optimize=True`), proposes
 a reallocation.
 
@@ -166,7 +173,8 @@ business before choosing variables is time well spent.
     treatment effects and other causal functions*
     ([arXiv:1702.06240](https://arxiv.org/abs/1702.06240)).
 *   Cinelli, Hazlett — *Making sense of sensitivity: extending omitted variable
-    bias* (JRSS-B, 2020) — the robustness value used by the sensitivity analysis.
+    bias* (JRSS-B, 2020) — the robustness value used by the sensitivity
+    analysis.
 *   Chiang, Kato, Matsushita, Ishihara — *Multiway cluster robust
     double/debiased machine learning*
     ([arXiv:1909.03489](https://arxiv.org/abs/1909.03489)).

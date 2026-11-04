@@ -17,6 +17,9 @@
 * ``family=None`` (no ``saturation`` block): the legacy path is intact (no
   ``<d_col>_transformed`` column, no ``step0_saturation/``) and the
   cluster-key determination rule still records the adopted 2-way keys.
+* A raw ``price`` treatment runs as its gap from the benchmark price
+  (``price_gap``), with the benchmark among the covariates and the price
+  investment built from ``sales_col``.
 * ``family`` set: Phase 0 (Stage A split + Stage B alpha selection) and the
   Phase 4 saturation-aware optimizer both run and emit their artifacts.
 * Non-spend treatments (``percentage`` / ``impressions`` / ``price``) never
@@ -63,6 +66,7 @@ from doubleml_pipeline.models import flaml_dml
 from doubleml_pipeline.preprocessing import scalers
 from doubleml_pipeline.test import helpers
 from doubleml_pipeline.utils import io as pipeline_io
+from doubleml_pipeline.visualization import html_extraction
 import numpy as np
 import pandas as pd
 
@@ -132,6 +136,7 @@ class FamilyNoneEndToEndTest(unittest.TestCase):
   """
 
   def _run(self, out_dir, **extra):
+    """Runs the full pipeline on the spend panel; returns the input frame."""
     df = make_panel(n_geo=6, n_periods=30)
     scaler = scalers.CausalDataScaler(
         standardize_cols=["spend", "X1", "X2", "sales"],
@@ -170,6 +175,7 @@ class FamilyNoneEndToEndTest(unittest.TestCase):
     return df
 
   def test_family_none_runs(self):
+    """No Phase 0 artifacts leak in, and the cluster keys are recorded."""
     with tempfile.TemporaryDirectory() as out_dir:
       df = self._run(out_dir)
       self.assertFalse(
@@ -189,7 +195,9 @@ class FamilyNoneEndToEndTest(unittest.TestCase):
       self.assertTrue(
           os.path.exists(helpers.find(out_dir, "optimization_metrics.csv"))
       )
-      summary = pd.read_csv(helpers.find(out_dir, "consolidated_3b_summary.csv"))
+      summary = pd.read_csv(
+          helpers.find(out_dir, "consolidated_3b_summary.csv")
+      )
       self.assertGreater(len(summary), 0)
 
       # The cluster-key determination rule: 6 geos x 2 items x 30 weeks ->
@@ -214,7 +222,198 @@ class FamilyNoneEndToEndTest(unittest.TestCase):
               "note": cluster_dml["visualization_cols"]["note"],
           },
       )
-      self.assertIn("whether or not saturation_config", cluster_dml["applies_to"])
+      self.assertIn(
+          "whether or not saturation_config", cluster_dml["applies_to"]
+      )
+
+
+def _make_price_panel(n_geo: int = 6, n_periods: int = 30, seed: int = 0):
+  """Geo x week panel whose treatment is a raw shelf price.
+
+  Each geo sells one of two items (list price 100 / 200).  In about 40% of
+  the weeks the item is discounted by 5-30%; units respond linearly to the
+  gap `list price - price`, and `sales = price * units` is the revenue.
+
+  Args:
+    n_geo: Number of geos; each is assigned to one of two items.
+    n_periods: Number of weekly periods starting at 2022-01-03.
+    seed: Seed for the random number generator.
+
+  Returns:
+    A DataFrame with date, geo, item, price, units, X1, X2, sales and
+    population columns.
+  """
+  rng = np.random.default_rng(seed)
+  rows = []
+  dates = pd.date_range("2022-01-03", periods=n_periods, freq="W")
+  for g in range(n_geo):
+    list_price = 100.0 if g % 2 == 0 else 200.0
+    base = rng.uniform(50, 150)
+    for d in dates:
+      discount = rng.uniform(0.05, 0.3) if rng.uniform() < 0.4 else 0.0
+      price = list_price * (1.0 - discount)
+      x1 = float(rng.normal())
+      x2 = float(rng.normal())
+      units = max(
+          1.0,
+          base + 0.8 * (list_price - price) + 3.0 * x1 - 1.5 * x2
+          + rng.normal(0, 2.0),
+      )
+      rows.append({
+          "date": d,
+          "geo": f"G{g}",
+          "item": f"I{g % 2}",
+          "price": price,
+          "units": units,
+          "X1": x1,
+          "X2": x2,
+          "sales": price * units,
+          "population": 1000.0,
+      })
+  return pd.DataFrame(rows)
+
+
+class PriceTreatmentEndToEndTest(unittest.TestCase):
+  """A raw ``price`` treatment runs end to end as its gap from the benchmark.
+
+  ``treatment_types={"price": "price"}`` without a benchmark: the column is a
+  price (all values > 0), so the pipeline resolves the group maximum
+  (``q_100``), renames the treatment to ``price_gap``, adds
+  ``price_benchmark`` to ``x_cols`` and builds ``price_investment`` from
+  ``sales_col``; Phases 1-4 (ROI output and the simple optimizer) then run on
+  the gap.  ``family=None`` keeps the run cheap.
+  """
+
+  def test_price_runs_as_gap(self):
+    """The gap, its benchmark covariate and its investment reach Phase 4."""
+    with tempfile.TemporaryDirectory() as out_dir:
+      df = _make_price_panel()
+      scaler = scalers.CausalDataScaler(
+          standardize_cols=["price", "X1", "X2", "sales"],
+          population_col="population",
+      )
+      orch = workflow.CausalWorkflowOrchestrator(
+          y_col="sales",
+          d_cols=["price"],
+          x_cols_list=[["X1", "X2"]],
+          ml_models_y=["rf"],
+          ml_models_t=["rf"],
+          n_folds_list=[3],
+          output_dir=out_dir,
+          covariates_for_cate_list=[["X1"]],
+          time_budget=1,
+          n_jobs=1,
+          hparam_policy="per_fold",
+          date_col="date",
+          geo_col="geo",
+          item_col="item",
+          run_sensitivity=False,
+          generate_html=False,
+          treatment_types={"price": "price"},
+          sales_col="sales",
+          optimize=True,
+      )
+      with mock.patch.object(
+          flaml_dml.FlamlRegressorDoubleML, "fit", helpers.deterministic_fit
+      ), warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=1)
+      messages = [str(w.message) for w in caught]
+      self.assertTrue(
+          any("gives no benchmark" in m and "q_100" in m for m in messages),
+          messages,
+      )
+      # The caller's frame and scaler lists.
+      self.assertNotIn("price_gap", df.columns)
+      self.assertEqual(
+          scaler.standardize_cols,
+          ["price", "X1", "X2", "sales", "price_gap", "price_benchmark"],
+      )
+      # The run-time configuration.
+      self.assertEqual(orch.d_cols, ["price_gap"])
+      self.assertEqual(orch.x_cols_list, [["X1", "X2", "price_benchmark"]])
+      self.assertEqual(
+          orch.treatment_spend_cols, {"price_gap": "price_investment"}
+      )
+      # Per-row outputs on the gap.
+      out = pd.read_csv(helpers.find(out_dir, "consolidated_1a_full_df.csv"))
+      self.assertEqual(len(out), len(df))
+      for col in (
+          "price",
+          "price_gap",
+          "price_benchmark",
+          "price_investment",
+          "estimated_incremental_KPI_price_gap",
+          "roi_amount_based_price_gap",
+      ):
+        self.assertIn(col, out.columns)
+      self.assertTrue((out["price_gap"] >= 0).all())
+      expected_bench = out.groupby(["item", "geo"])["price"].transform("max")
+      np.testing.assert_allclose(out["price_benchmark"], expected_bench)
+      np.testing.assert_allclose(
+          out["price_investment"], out["units"] * out["price_gap"], rtol=1e-6
+      )
+      self.assertTrue(
+          (out.loc[out["price_gap"] == 0, "roi_amount_based_price_gap"] == 0)
+          .all()
+      )
+      # ROI output tree and the simple optimizer of the gap treatment.
+      roi_dir = os.path.join(
+          out_dir, "step4_consolidated_results", "roi_output", "price_gap"
+      )
+      self.assertTrue(os.path.isdir(roi_dir), sorted(os.listdir(out_dir)))
+      self.assertTrue(
+          os.path.exists(
+              os.path.join(
+                  roi_dir, "007_optimization", "optimization_metrics.csv"
+              )
+          )
+      )
+      self.assertTrue(
+          os.path.exists(
+              os.path.join(out_dir, "price_benchmark", "price_benchmark.csv")
+          )
+      )
+      summary = pd.read_csv(
+          helpers.find(out_dir, "consolidated_3b_summary.csv")
+      )
+      self.assertIn("price_gap", summary["Channel"].tolist())
+      # metadata.json.
+      with open(helpers.find(out_dir, "metadata.json"), encoding="utf-8") as fh:
+        metadata = json.load(fh)
+      self.assertEqual(metadata["treatment_cols"], ["price_gap"])
+      self.assertEqual(metadata["treatment_types"], {"price_gap": "price"})
+      self.assertEqual(
+          metadata["treatment_spend_cols"], {"price_gap": "price_investment"}
+      )
+      self.assertEqual(
+          metadata["x_cols_list"], [["X1", "X2", "price_benchmark"]]
+      )
+      record = metadata["price_benchmarks"]["price_gap"]
+      self.assertEqual(record["source_column"], "price")
+      self.assertEqual(record["benchmark"]["description"], "q_100")
+      self.assertEqual(record["benchmark_resolution"], "auto")
+      self.assertEqual(record["benchmark_column"], "price_benchmark")
+      self.assertEqual(record["group_cols"], ["item", "geo"])
+      self.assertEqual(record["n_rows_gap_negative"], 0)
+      self.assertEqual(record["cost_source"], "auto")
+      self.assertEqual(record["cost_column"], "price_investment")
+      # HTML header: the benchmark next to the type, and the origin of the
+      # investment next to the spend column.
+      report_path = html_extraction.generate_html_report(out_dir)
+      with open(report_path, encoding="utf-8") as fh:
+        html = fh.read()
+      self.assertIn(
+          "<strong>Treatment Types:</strong> price_gap: price (benchmark:"
+          " q_100, automatic)",
+          html,
+      )
+      self.assertIn(
+          "<strong>Treatment Spend Col(s):</strong> price_gap:"
+          " price_investment (not specified; computed from the benchmark:"
+          " sales / price * max(price_gap, 0))",
+          html,
+      )
 
 
 # Per-treatment Phase 0 files (tanh is bounded: the Diag5 figure exists) plus
@@ -425,7 +624,9 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
 
       # Phase 1-3 ran on the raw (linear) treatment: no *_transformed columns
       # from the saturation optimizer.
-      consolidated = pd.read_csv(helpers.find(out_dir, "consolidated_1a_full_df.csv"))
+      consolidated = pd.read_csv(
+          helpers.find(out_dir, "consolidated_1a_full_df.csv")
+      )
       self.assertNotIn("optimized_spend_transformed", consolidated.columns)
 
       # The consolidated frame covers EVERY input row.  The D_inf
@@ -486,14 +687,22 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
       self.assertIn("falling back to linear optimization", html)
       self.assertIn("Cluster DML Keys", html)
       self.assertIn("Meaning of T/c", html)
-      # Header: the optimizer actually in force (derived False here, the
-      # linear fallback does not rewrite it), and the Phase 0 outcome: the
-      # 1-SE test kept the treatment linear, so no family was adopted.
+      # Header: the user's selection (not set; derived False here) and the
+      # final decision (True: the simple optimizer ran through the linear
+      # fallback); the family the user configured; and the Phase 0 outcome
+      # (the 1-SE test kept the treatment linear).
       self.assertIn(
-          "<strong>Simple Optimization:</strong> False", html
+          "<strong>Simple Optimization:</strong> user selection: not set"
+          " (default False: a saturation family is configured) | final"
+          " decision: True (linear fallback: Phase 0 selected linear for"
+          " spend)",
+          html,
       )
-      self.assertIn("<strong>Selected family:</strong> None <br>", html)
+      self.assertIn("<strong>Selected family:</strong> tanh <br>", html)
       self.assertIn("<strong>Decision:</strong> linear <br>", html)
+      self.assertIsNone(metadata["simple_optimization_requested"])
+      self.assertFalse(metadata["simple_optimization_derived"])
+      self.assertFalse(metadata["simple_optimization_forced"])
       self.assertLess(
           html.index("<strong>CATE Intercept:</strong>"),
           html.index("<strong>Selected family:</strong>"),
@@ -625,7 +834,9 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
           self.assertAlmostEqual(contour, 0.0, delta=1e-8)
       self.assertIn(total["benchmark_covariate"], ("X1", "X2"))
       self.assertTrue(
-          os.path.exists(helpers.find(out_dir, "spend_total_sensitivity_contour.png"))
+          os.path.exists(
+              helpers.find(out_dir, "spend_total_sensitivity_contour.png")
+          )
       )
       # HTML: the sensitivity note hook exists; with selected_family=None the
       # per-treatment map carries null, so the line stays hidden.
@@ -692,6 +903,7 @@ class NonSpendFallsBackToSimpleOptimizerTest(unittest.TestCase):
   """
 
   def _make_orchestrator(self, out_dir, **overrides):
+    """A percentage-treatment orchestrator with a saturation family."""
     kwargs = dict(
         y_col="sales",
         d_cols=["discount"],

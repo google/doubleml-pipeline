@@ -708,6 +708,114 @@ class PlotsTest(unittest.TestCase):
     self.assertGreaterEqual(leg_box.x0, row_x0 - tol)
     self.assertLessEqual(leg_box.x1, row_x1 + tol)
 
+  @mock.patch("matplotlib.pyplot.close")
+  @mock.patch("matplotlib.pyplot.savefig")
+  def test_cate_charts_share_the_cell_size_and_fonts(
+      self, mock_savefig, mock_close
+  ):
+    """Scatter-matrix and response-curve cells are equal squares, same fonts.
+
+    Both charts draw their cells at ``plots._CATE_CELL_IN`` inches whatever
+    their number of columns, so that the report, which scales the two pngs by
+    one common factor, shows equal squares with equal font sizes.
+    """
+    del mock_savefig, mock_close
+    # pylint: disable=protected-access
+    d_cols = ["tv_spend", "digital_spend"]
+    frame = self._scatter_frame()
+    plots.plot_cate_scatter_matrix(
+        frame,
+        d_cols,
+        ["price"],
+        ["holiday"],
+        {d: f"CATE_{d} = 1.0" for d in d_cols},
+        "unused.png",
+    )
+    matrix_fig = plt.gcf()
+    plots.plot_cate_response_curves(frame, d_cols, ["holiday"], "unused.png")
+    row_fig = plt.gcf()
+    self.assertIsNot(matrix_fig, row_fig)
+    matrix_fig.canvas.draw()
+    row_fig.canvas.draw()
+
+    def cell_edges_in(fig):
+      """(width, height) in inches of every square cell of ``fig``."""
+      return [
+          (
+              ax.get_position().width * fig.get_figwidth(),
+              ax.get_position().height * fig.get_figheight(),
+          )
+          for ax in fig.axes
+          if ax.get_box_aspect() == 1
+      ]
+
+    matrix_cells = cell_edges_in(matrix_fig)
+    row_cells = cell_edges_in(row_fig)
+    # 1 covariate column x 3 rows, and 3 cells in the row.
+    self.assertEqual(len(matrix_cells), 3)
+    self.assertEqual(len(row_cells), 3)
+    for width, height in matrix_cells + row_cells:
+      self.assertAlmostEqual(width, plots._CATE_CELL_IN, places=2)
+      self.assertAlmostEqual(height, plots._CATE_CELL_IN, places=2)
+    # Same fonts: the x labels fit at the full label font in both charts and
+    # the tick labels share one size.
+    matrix_cell = [ax for ax in matrix_fig.axes if ax.get_box_aspect() == 1][0]
+    row_cell = [ax for ax in row_fig.axes if ax.get_box_aspect() == 1][0]
+    self.assertEqual(
+        matrix_cell.xaxis.label.get_fontsize(),
+        row_cell.xaxis.label.get_fontsize(),
+    )
+    self.assertEqual(
+        matrix_cell.get_xticklabels()[0].get_fontsize(),
+        row_cell.get_xticklabels()[0].get_fontsize(),
+    )
+    # The figure widths differ with the number of columns; the report
+    # compensates by scaling the pngs proportionally (html_extraction).
+    self.assertNotEqual(matrix_fig.get_figwidth(), row_fig.get_figwidth())
+
+  def test_cate_cell_geometry_margins_grow_with_the_wrapped_label_lines(self):
+    """Every extra line of a wrapped label adds one line height to its margin.
+
+    The top margin holds the cell titles, the bottom margin the x labels:
+    each grows by ``_CATE_EXTRA_LINE_IN`` per extra line its labels wrap to,
+    and the row gap by both.  The left margin never grows (it holds the full
+    y-label budget already).  The base margins themselves are layout
+    constants and are deliberately not pinned here.
+    """
+    # pylint: disable=protected-access
+    short = plots._cate_cell_geometry(
+        2, plots._cate_cell_texts(["tv_spend", "digital_spend"], ["price"])
+    )
+    self.assertEqual(short["cell_in"], plots._CATE_CELL_IN)
+    # Long names: the cell title (`Grouped by: <covariate>`) and the x label
+    # (`Treatment: <treatment>`) wrap to two lines each.
+    _, renames = self._long_name_frame()
+    texts = plots._cate_cell_texts([renames["tv_spend"]], [renames["price"]])
+    cell_in = short["cell_in"]
+    title, _ = plots._fit_cell_label("title", texts["title"][0], cell_in)
+    x_label, _ = plots._fit_cell_label("x", texts["x"][0], cell_in)
+    self.assertEqual(title.count("\n"), 1)
+    self.assertEqual(x_label.count("\n"), 1)
+    wrapped = plots._cate_cell_geometry(1, texts)
+    extra = plots._CATE_EXTRA_LINE_IN
+    self.assertAlmostEqual(wrapped["top_in"] - short["top_in"], extra)
+    self.assertAlmostEqual(wrapped["bottom_in"] - short["bottom_in"], extra)
+    self.assertAlmostEqual(
+        wrapped["hspace"] - short["hspace"], 2 * extra / plots._CATE_CELL_IN
+    )
+    self.assertEqual(wrapped["left_in"], short["left_in"])
+    # The response-curve chart has no colorbar gutter: only the room for the
+    # last tick label is kept on the right; the other margins are the same.
+    row = plots._cate_cell_geometry(
+        3, plots._cate_response_cell_texts(["tv_spend", "digital_spend"]),
+        colorbar=False,
+    )
+    self.assertEqual(row["right_in"], plots._CATE_ROW_RIGHT_IN)
+    self.assertLess(row["right_in"], short["right_in"])
+    self.assertEqual(row["top_in"], short["top_in"])
+    self.assertEqual(row["bottom_in"], short["bottom_in"])
+    # pylint: enable=protected-access
+
   def test_response_band_is_the_95pct_range_of_row_slopes(self):
     """The band is the 2.5-97.5% range of theta_i = KPI_i / f_i times the curve."""
     # pylint: disable=protected-access
@@ -953,7 +1061,7 @@ class GenerateHtmlReportTest(unittest.TestCase):
         return dict(self._header_rows(f.read()))
 
   def test_header_reports_phase0_family_and_decision(self):
-    """Saturation run: the adopted family and the 1-SE decision per treatment."""
+    """Saturation run: the configured family, the 1-SE decision per treatment."""
     base = {
         "treatment_cols": ["tv_spend"],
         "outcome_col": "sales",
@@ -963,7 +1071,8 @@ class GenerateHtmlReportTest(unittest.TestCase):
         "saturation_family": "tanh",
         "simple_optimization": False,
     }
-    # One treatment: the bare values.
+    # One treatment: the bare values.  `Selected family` is the family the
+    # user configured; the family Phase 0 adopted is part of the decision.
     rows = self._header_rows_of_run({
         **base,
         "saturation_selected_family": {"tv_spend": "tanh"},
@@ -976,10 +1085,14 @@ class GenerateHtmlReportTest(unittest.TestCase):
         },
     })
     self.assertEqual(rows["Selected family"], "tanh")
-    self.assertEqual(rows["Decision"], "saturation")
-    self.assertEqual(rows["Simple Optimization"], "False")
+    self.assertEqual(rows["Decision"], "saturation (tanh)")
+    # Older metadata without the user's selection: the final decision only.
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: n/a (older metadata) | final decision: False",
+    )
     # Several treatments: one entry per treatment, in pipeline order; a
-    # treatment kept linear by the 1-SE test shows family None.
+    # treatment kept linear by the 1-SE test shows `linear`.
     rows = self._header_rows_of_run({
         **base,
         "treatment_cols": ["tv_spend", "digital_spend"],
@@ -993,16 +1106,302 @@ class GenerateHtmlReportTest(unittest.TestCase):
             "digital_spend": {"decision": "linear", "selected_family": None},
         },
     })
+    self.assertEqual(rows["Selected family"], "tanh")
     self.assertEqual(
-        rows["Selected family"], "tv_spend: tanh, digital_spend: None"
+        rows["Decision"], "tv_spend: saturation (tanh), digital_spend: linear"
     )
-    self.assertEqual(
-        rows["Decision"], "tv_spend: saturation, digital_spend: linear"
-    )
-    # A family configured but no Phase 0 record (older metadata): n/a.
+    # A family configured but no Phase 0 record (older metadata): the
+    # configured family is still known, the decision is not.
     rows = self._header_rows_of_run(base)
-    self.assertEqual(rows["Selected family"], "n/a")
+    self.assertEqual(rows["Selected family"], "tanh")
     self.assertEqual(rows["Decision"], "n/a")
+
+  def test_header_simple_optimization_shows_selection_and_fallback(self):
+    """User selection and final decision: derived, forced, linear fallback."""
+    base = {
+        "treatment_cols": ["tv_spend"],
+        "outcome_col": "sales",
+        "treatment_types": {"tv_spend": "spend"},
+        "x_cols_list": [["price"]],
+        "date_col": "date",
+        "saturation_family": "tanh",
+    }
+    # Not set (derived False) and no fallback: the simple optimizer did not
+    # run.
+    rows = self._header_rows_of_run({
+        **base,
+        "simple_optimization": False,
+        "simple_optimization_requested": None,
+        "simple_optimization_derived": False,
+        "simple_optimization_forced": False,
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: not set (default False: a saturation family is"
+        " configured) | final decision: False",
+    )
+    # Explicit False, Phase 0 selected linear: the simple optimizer ran, so
+    # the final decision is True and the reason is named.
+    rows = self._header_rows_of_run({
+        **base,
+        "simple_optimization": False,
+        "simple_optimization_requested": False,
+        "simple_optimization_derived": False,
+        "simple_optimization_forced": False,
+        "saturation_phase0": {
+            "tv_spend": {"decision": "linear", "selected_family": None}
+        },
+        "phase4_optimization": {
+            "tv_spend": {"phase4_fallback_to_linear": True}
+        },
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: False | final decision: True (linear fallback:"
+        " Phase 0 selected linear for tv_spend)",
+    )
+    # Two treatments, one fell back: the decision is listed per treatment.
+    rows = self._header_rows_of_run({
+        **base,
+        "treatment_cols": ["tv_spend", "radio_spend"],
+        "treatment_types": {"tv_spend": "spend", "radio_spend": "spend"},
+        "simple_optimization": False,
+        "simple_optimization_requested": False,
+        "simple_optimization_derived": False,
+        "simple_optimization_forced": False,
+        "phase4_optimization": {
+            "tv_spend": {"phase4_fallback_to_linear": False},
+            "radio_spend": {"phase4_fallback_to_linear": True},
+        },
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: False | final decision: tv_spend: False,"
+        " radio_spend: True (linear fallback: Phase 0 selected linear for"
+        " radio_spend)",
+    )
+    # A treatment without a Phase 4 record (its optimization was skipped)
+    # keeps the value in force and is still listed, in `treatment_cols`
+    # order.
+    rows = self._header_rows_of_run({
+        **base,
+        "treatment_cols": ["tv_spend", "radio_spend"],
+        "treatment_types": {"tv_spend": "spend", "radio_spend": "spend"},
+        "simple_optimization": False,
+        "simple_optimization_requested": False,
+        "simple_optimization_derived": False,
+        "simple_optimization_forced": False,
+        "phase4_optimization": {
+            "tv_spend": {"phase4_fallback_to_linear": True}
+        },
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: False | final decision: tv_spend: True,"
+        " radio_spend: False (linear fallback: Phase 0 selected linear for"
+        " tv_spend)",
+    )
+    # Explicit False forced to True by a non-spend treatment.
+    rows = self._header_rows_of_run({
+        **base,
+        "treatment_types": {"tv_spend": "impressions"},
+        "simple_optimization": True,
+        "simple_optimization_requested": False,
+        "simple_optimization_derived": False,
+        "simple_optimization_forced": True,
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: False | final decision: True (forced: non-spend"
+        " treatment)",
+    )
+    # Explicit True.
+    rows = self._header_rows_of_run({
+        **base,
+        "simple_optimization": True,
+        "simple_optimization_requested": True,
+        "simple_optimization_derived": True,
+        "simple_optimization_forced": False,
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: True | final decision: True",
+    )
+    # Not set without a saturation family: derived True.
+    rows = self._header_rows_of_run({
+        **base,
+        "saturation_family": None,
+        "simple_optimization": True,
+        "simple_optimization_requested": None,
+        "simple_optimization_derived": True,
+        "simple_optimization_forced": False,
+    })
+    self.assertEqual(
+        rows["Simple Optimization"],
+        "user selection: not set (default True: no saturation family)"
+        " | final decision: True",
+    )
+
+  def test_header_names_the_price_benchmark_and_investment(self):
+    """A price treatment shows its benchmark and how its spend column arose."""
+    base = {
+        "treatment_cols": ["tv_spend"],
+        "outcome_col": "sales",
+        "treatment_types": {"tv_spend": "price"},
+        "treatment_spend_cols": {"tv_spend": "tv_spend_investment"},
+        "x_cols_list": [["price"]],
+        "date_col": "date",
+    }
+    record = {
+        "benchmark": {
+            "method": "rolling_max",
+            "percentile": None,
+            "window": "26W",
+            "column": None,
+            "value": None,
+            "description": "rolling_max(window=26W)",
+        },
+        "benchmark_resolution": "explicit",
+        "cost_source": "auto",
+        "cost_column": "tv_spend_investment",
+        "cost_input_column": "sales",
+        "cost_formula": "sales / tv_price * max(tv_spend, 0)",
+    }
+    # rolling_max with its window; the investment computed from the
+    # benchmark because no treatment_spend_cols entry was given.
+    rows = self._header_rows_of_run(
+        {**base, "price_benchmarks": {"tv_spend": record}}
+    )
+    self.assertEqual(
+        rows["Treatment Types"],
+        "tv_spend: price (benchmark: rolling_max, window: 26W)",
+    )
+    self.assertEqual(
+        rows["Treatment Spend Col(s)"],
+        "tv_spend: tv_spend_investment (not specified; computed from the"
+        " benchmark: sales / tv_price * max(tv_spend, 0))",
+    )
+    # An automatic q_100 and a caller's cost column.
+    rows = self._header_rows_of_run({
+        **base,
+        "price_benchmarks": {
+            "tv_spend": {
+                **record,
+                "benchmark": {
+                    "method": "quantile",
+                    "percentile": 100,
+                    "description": "q_100",
+                },
+                "benchmark_resolution": "auto",
+                "cost_source": "user",
+                "cost_input_column": "Cost",
+                "cost_formula": "Cost where tv_spend > 0, else 0",
+            }
+        },
+    })
+    self.assertEqual(
+        rows["Treatment Types"],
+        "tv_spend: price (benchmark: q_100, automatic)",
+    )
+    self.assertEqual(
+        rows["Treatment Spend Col(s)"],
+        "tv_spend: tv_spend_investment (from treatment_spend_cols 'Cost':"
+        " Cost where tv_spend > 0, else 0)",
+    )
+    # Older metadata without the record, and non-price treatments: unchanged.
+    rows = self._header_rows_of_run(base)
+    self.assertEqual(rows["Treatment Types"], "tv_spend: price")
+    self.assertEqual(
+        rows["Treatment Spend Col(s)"], "tv_spend: tv_spend_investment"
+    )
+    # The remaining benchmark kinds: a column, a constant and `as_is`.
+    # pylint: disable=protected-access
+    for benchmark, expected in (
+        ({"method": "column", "column": "list_price"},
+         " (benchmark: column 'list_price')"),
+        ({"method": "constant", "value": 100.0},
+         " (benchmark: constant 100)"),
+        ({"method": "as_is"},
+         " (benchmark: as_is, the column is a gap already)"),
+    ):
+      self.assertEqual(
+          html_extraction._price_type_suffix(
+              "price",
+              {**record, "benchmark": benchmark, "benchmark_resolution": "x"},
+          ),
+          expected,
+      )
+    self.assertEqual(html_extraction._price_type_suffix("spend", record), "")
+    # No investment column (`cost_source` = none): nothing to append.
+    self.assertEqual(
+        html_extraction._price_investment_suffix(
+            {**record, "cost_source": "none", "cost_column": None}
+        ),
+        "",
+    )
+
+  def test_cate_images_share_one_scale(self):
+    """The narrower CATE png gets a proportional width, the wider 100%."""
+    with tempfile.TemporaryDirectory() as tmp:
+      self._write_run(
+          tmp,
+          {
+              "treatment_cols": ["tv_spend"],
+              "outcome_col": "sales",
+              "treatment_types": {"tv_spend": "spend"},
+              "x_cols_list": [["price"]],
+              "date_col": "date",
+          },
+      )
+      cate_dir = os.path.join(
+          tmp, "step4_consolidated_results", "graph", "004_cate"
+      )
+      os.makedirs(cate_dir, exist_ok=True)
+      for name, width in (
+          ("cate_scatter_matrix.png", 400),
+          ("cate_response_curves.png", 300),
+      ):
+        fig = plt.figure(figsize=(width / 100.0, 1.0), dpi=100)
+        fig.savefig(os.path.join(cate_dir, name), dpi=100)
+        plt.close(fig)
+      report_path = html_extraction.generate_html_report(tmp)
+      with open(report_path, encoding="utf-8") as f:
+        html = f.read()
+    start = html.index('id="tab_004_cate"')
+    end = html.index("</div>", start)
+    styles = re.findall(
+        r'<img class="chart-img" style="([^"]+)"', html[start:end]
+    )
+    self.assertEqual(styles, ["width: 100.00%", "width: 75.00%"])
+
+  def test_png_width_and_cate_image_widths(self):
+    """The PNG width comes from the header; missing files fall back."""
+    # pylint: disable=protected-access
+    with tempfile.TemporaryDirectory() as tmp:
+      path = os.path.join(tmp, "a.png")
+      fig = plt.figure(figsize=(2.5, 1.0), dpi=100)
+      fig.savefig(path, dpi=100)
+      plt.close(fig)
+      self.assertEqual(html_extraction._png_width(path), 250)
+      missing = os.path.join(tmp, "missing.png")
+      self.assertIsNone(html_extraction._png_width(missing))
+      # A file that is not a PNG (wrong signature) or is truncated: no width.
+      not_png = os.path.join(tmp, "not.png")
+      with open(not_png, "wb") as handle:
+        handle.write(b"GIF89a" + bytes(30))
+      self.assertIsNone(html_extraction._png_width(not_png))
+      truncated = os.path.join(tmp, "short.png")
+      with open(truncated, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n")
+      self.assertIsNone(html_extraction._png_width(truncated))
+      self.assertEqual(
+          html_extraction._cate_image_widths([path, missing]),
+          ["width: 100.00%", "width: 100%"],
+      )
+      self.assertEqual(
+          html_extraction._cate_image_widths([missing, missing]),
+          ["width: 100%", "width: 100%"],
+      )
 
 
 if __name__ == "__main__":

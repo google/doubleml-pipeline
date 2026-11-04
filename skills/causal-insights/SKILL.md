@@ -69,7 +69,13 @@ calculation errors:
     `[roi_low, roi_high]` against `opt_threshold_roi`: `roi_high <
     threshold_roi` -> `not_worth_investing`; `roi_low > threshold_roi` ->
     `worth_investing`; straddling -> `undetermined` (omit verdict if
-    `opt_threshold_roi` is `null` or no spend column exists).
+    `opt_threshold_roi` is `null` or no spend column exists). A `price`
+    treatment is estimated as a **gap** `benchmark price - price` (its column
+    is named `<price>_gap`; `metadata["price_benchmarks"][d]` gives the
+    benchmark, the benchmark column and the investment column), so
+    `effect_per_unit` is "incremental KPI per currency unit of price cut",
+    rows with a zero gap were sold at the benchmark price, and a negative gap
+    (price above the benchmark) counts as zero investment.
 3.  **Grade CATE heterogeneity from the `median` row with Bonferroni scaling:**
     In `cate_coef_dict_pooling.csv` (`model == "median"`), match all basis
     p-values for covariate `c` (`<c>_pvalue`, `bs(<c>, ...)`, `C(<c>)...`),

@@ -1149,22 +1149,29 @@ def _fit_cell_label(kind, text, cell_in):
 # gutter: room for the last tick label of the last cell.
 _CATE_ROW_RIGHT_IN = 1.0
 
+# Edge of every (square) cell of the two CATE charts, in inches.  The same
+# constant for the scatter matrix and the response curves, so their cells,
+# fonts and tick labels are drawn at exactly the same size; the HTML report
+# then scales both pngs by the same factor (see
+# ``html_extraction._cate_image_widths``) and the two charts match on screen.
+_CATE_CELL_IN = 6.0
+
 
 def _cate_cell_geometry(n_cols, cell_texts, colorbar=True):
   """Square-cell geometry (inches) shared by the CATE charts.
 
-  Every column is budgeted 10 inches before the margins are taken out, and
-  the cell edge is chosen so that every cell comes out exactly square.  The
-  cell titles and axis labels are wrapped to the cell size
+  Every cell is a square of ``_CATE_CELL_IN`` inches, in both charts.  The
+  cell titles and axis labels are wrapped to that cell size
   (:func:`_fit_cell_label`) and the margins between / around the cells grow
   with the number of wrapped lines, so long treatment or covariate names
-  never run into a neighbouring cell or out of the figure.  The wrapped line
-  counts depend on the cell size, which depends on the margins, which depend
-  on the line counts: the geometry is iterated to a fixed point.
+  never run into a neighbouring cell or out of the figure; the width of the
+  cell grid follows from the cell size, the spacing and the margins.
 
   Args:
     n_cols: Number of cell columns.
-    cell_texts: The raw cell labels (see :func:`_cate_cell_texts`).
+    cell_texts: The raw cell labels of every kind in ``_CATE_LABEL_BUDGET``
+      (see :func:`_cate_cell_texts`; a kind without labels, such as
+      ``'cbar'`` of the response-curve chart, maps to an empty list).
     colorbar: Whether a colorbar gutter is reserved to the right of the last
       column (the scatter matrix); otherwise only the room for the last tick
       label (the response-curve chart).
@@ -1175,61 +1182,39 @@ def _cate_cell_geometry(n_cols, cell_texts, colorbar=True):
     ``top_in``, ``bottom_in``, and the gridspec spacings ``wspace`` and
     ``hspace`` (fractions of the cell edge).
   """
-  # Base margins, sized for single-line labels at the fonts above (the layout
-  # itself -- square cells -- is unchanged by the font size).
-  panel_in = 10.0
+  # Base margins, sized for single-line labels at the fonts above.
   base_left_in = 2.6  # up to a three-line y label + tick labels
   base_top_in = 1.7  # suptitle + one-line cell title
   base_bottom_in = 1.1  # one-line x label + tick labels
   base_cbar_in = 2.4  # colorbar gutter to the right of the last column
   wspace = 0.55
   base_hspace = 0.38  # one-line x label + ticks + one-line title below
+  cell_in = _CATE_CELL_IN
 
-  grid_width = panel_in * n_cols
-
-  def _margins(lines):
-    """Margins (inches) for the given number of lines per label kind."""
-    extra = {k: max(0, v - 1) * _CATE_EXTRA_LINE_IN for k, v in lines.items()}
-    return {
-        # The base left margin already holds the full y-label budget (three
-        # lines); beyond that the font shrinks, so it never has to grow.
-        'left': base_left_in,
-        'top': base_top_in + extra['title'],
-        'bottom': base_bottom_in + extra['x'],
-        'right': (
-            base_cbar_in + extra['cbar'] if colorbar else _CATE_ROW_RIGHT_IN
-        ),
-        'gap': extra['x'] + extra['title'],
-    }
-
-  def _cell_edge(margins):
-    """Cell edge (inches) at which every cell comes out exactly square."""
-    return (grid_width - margins['left'] - margins['right']) / (
-        n_cols + (n_cols - 1) * wspace
-    )
-
-  def _line_counts(cell_in):
-    """Lines of the tallest wrapped label of each kind at ``cell_in``."""
-    return {
-        kind: max(
-            [_fit_cell_label(kind, t, cell_in)[0].count('\n') + 1 for t in ts]
-            or [1]
-        )
-        for kind, ts in cell_texts.items()
-    }
-
-  # The wrapped line counts depend on the cell size, which depends on the
-  # margins, which depend on the line counts: iterate to a fixed point.
-  lines = {kind: 1 for kind in _CATE_LABEL_BUDGET}
-  for _ in range(4):
-    margins = _margins(lines)
-    cell_in = _cell_edge(margins)
-    new_lines = _line_counts(cell_in)
-    if new_lines == lines:
-      break
-    lines = new_lines
-  margins = _margins(lines)
-  cell_in = _cell_edge(margins)
+  # Lines of the tallest wrapped label of each kind at the fixed cell size
+  # (one line for a kind without labels).
+  lines = {
+      kind: max(
+          [_fit_cell_label(kind, t, cell_in)[0].count('\n') + 1 for t in ts]
+          or [1]
+      )
+      for kind, ts in cell_texts.items()
+  }
+  extra = {k: max(0, v - 1) * _CATE_EXTRA_LINE_IN for k, v in lines.items()}
+  margins = {
+      # The base left margin already holds the full y-label budget (three
+      # lines); beyond that the font shrinks, so it never has to grow.
+      'left': base_left_in,
+      'top': base_top_in + extra['title'],
+      'bottom': base_bottom_in + extra['x'],
+      'right': base_cbar_in + extra['cbar'] if colorbar else _CATE_ROW_RIGHT_IN,
+      'gap': extra['x'] + extra['title'],
+  }
+  grid_width = (
+      margins['left']
+      + margins['right']
+      + cell_in * (n_cols + (n_cols - 1) * wspace)
+  )
   return {
       'grid_width': grid_width,
       'cell_in': cell_in,

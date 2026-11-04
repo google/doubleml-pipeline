@@ -27,6 +27,7 @@ import threading
 import time
 from typing import Any
 from typing import Dict
+from typing import Iterable
 from typing import List
 from typing import Optional
 import warnings
@@ -47,6 +48,7 @@ from .evaluation import saturation_evaluation
 from .evaluation import selection
 from .evaluation import sensitivity
 from .models import saturation as saturation_lib
+from .preprocessing import price_benchmark
 from .preprocessing import scalers
 from .utils import io
 from .visualization import html_extraction
@@ -533,7 +535,7 @@ class CausalWorkflowOrchestrator:
       sensitivity_scope: Optional[List[str]] = None,
       ground_truth_existence: bool = False,
       ground_truth_effect_column: Optional[List[str]] = None,
-      treatment_types: Optional[Dict[str, str]] = None,
+      treatment_types: Optional[Dict[str, Any]] = None,
       treatment_spend_cols: Optional[Dict[str, str]] = None,
       sales_col: Optional[str] = None,
       peak_months: Optional[List[int]] = None,
@@ -637,10 +639,51 @@ class CausalWorkflowOrchestrator:
       )
     self.ground_truth_existence = ground_truth_existence
     self.ground_truth_effect_column = ground_truth_effect_column or []
-    self.treatment_types = treatment_types or {}
+    # A key of `treatment_types` / `treatment_spend_cols` that is not a
+    # treatment would be ignored silently (the treatment would keep the
+    # default type "spend" and its own column as cost), so it is an error.
+    self._check_treatment_keys("treatment_types", treatment_types or {})
+    self._check_treatment_keys(
+        "treatment_spend_cols", treatment_spend_cols or {}
+    )
+    # `treatment_types[d]` is the type as a string, or -- for a `price`
+    # treatment -- a dict `{"type": "price", "benchmark": ..., "window": ...}`
+    # that also sets the benchmark price (see `preprocessing.price_benchmark`).
+    # Only the type string is kept here (every consumer, metadata.json and the
+    # HTML report compare strings); the benchmark specification goes to
+    # `price_benchmark_specs`, resolved and applied by `_apply_price_treatments`
+    # at the start of `run_full_pipeline`.
+    self.treatment_types: Dict[str, str] = {}
+    self.price_benchmark_specs: Dict[str, price_benchmark.BenchmarkSpec] = {}
+    for d_col, raw_type in (treatment_types or {}).items():
+      ttype, spec = price_benchmark.parse_treatment_type(d_col, raw_type)
+      self.treatment_types[d_col] = ttype
+      if spec is not None:
+        self.price_benchmark_specs[d_col] = spec
     for d_col in self.d_cols:
       if d_col not in self.treatment_types:
         self.treatment_types[d_col] = "spend"
+    # A lag `<c>_l<n>` listed in d_cols without its own entry while its base
+    # column `<c>` has a non-"spend" one would silently be a "spend"
+    # treatment (a lag of a price is a price): an error, not a default.
+    given = set(treatment_types or {})
+    for d_col in self.d_cols:
+      base, lag = price_benchmark.split_lag(d_col)
+      if not lag or d_col in given or base not in given:
+        continue
+      if self.treatment_types[base] != "spend":
+        raise ValueError(
+            f"treatment_types: '{d_col}' has no entry while its base column"
+            f" '{base}' is '{self.treatment_types[base]}'; a lag needs its own"
+            f" entry, e.g. treatment_types['{d_col}'] ="
+            f" treatment_types['{base}']."
+        )
+    # Filled by `_apply_price_treatments` (one entry per price treatment, by
+    # its final column name); written to metadata.json["price_benchmarks"].
+    self._price_benchmark_records: Dict[str, Dict[str, Any]] = {}
+    # The treatment configuration as given, restored at the start of every run
+    # so that the renames of `_apply_price_treatments` do not accumulate.
+    self._price_config_backup: Optional[Dict[str, Any]] = None
 
     self.treatment_spend_cols = treatment_spend_cols or {}
     for d_col in self.d_cols:
@@ -686,8 +729,12 @@ class CausalWorkflowOrchestrator:
     # A saturation run is only meaningful with the saturation-aware optimizer,
     # so derive it rather than making the caller remember a second flag. An
     # explicit True/False from the caller always wins ...
+    # The user's selection (`None` = derived) and the derived value are kept
+    # for metadata.json / the HTML header next to the value in force.
+    self.simple_optimization_requested = simple_optimization
     if simple_optimization is None:
       simple_optimization = self.sat_family is None
+    self.simple_optimization_derived = bool(simple_optimization)
 
     # ... except for non-spend treatments.  The saturation-aware optimizer
     # budgets the treatment column directly, which presupposes `g(T) = T` --
@@ -704,6 +751,7 @@ class CausalWorkflowOrchestrator:
     forced_simple_optimization = bool(non_spend_treatments) and (
         not simple_optimization
     )
+    self.simple_optimization_forced = forced_simple_optimization
     if forced_simple_optimization:
       described = ", ".join(
           f"'{d}' ({self.treatment_types[d]})" for d in non_spend_treatments
@@ -871,6 +919,44 @@ class CausalWorkflowOrchestrator:
         peak_months if peak_months is not None else [3, 7, 11, 12]
     )
     self.generate_html = generate_html
+
+  def _check_treatment_keys(self, param: str, keys: Iterable[Any]) -> None:
+    """Rejects keys of the treatment dicts that are not in ``d_cols``.
+
+    Applies to ``treatment_types`` and ``treatment_spend_cols``. Such a key
+    names no treatment, so nothing would read it: the treatment it was meant
+    for would keep the default type ``"spend"`` -- a ``price`` treatment would
+    then be estimated as a raw price, without the benchmark step -- and its
+    own column as the cost, without any notice. The typical cause is a key
+    spelled differently from the ``d_cols`` entry (for example the word
+    ``'price'`` instead of the price column's name) or a lag listed in
+    ``d_cols`` without its own entry.
+
+    Args:
+      param: The parameter name (used in the error message).
+      keys: The keys given for that parameter.
+
+    Raises:
+      ValueError: If any key is not listed in ``d_cols``.
+    """
+    unknown = [str(k) for k in keys if k not in self.d_cols]
+    if not unknown:
+      return
+    by_lower = {str(d).lower(): str(d) for d in self.d_cols}
+    described = []
+    for key in unknown:
+      lowered = key.lower()
+      hits = difflib.get_close_matches(lowered, list(by_lower), n=1)
+      if not hits:
+        hits = [c for c in by_lower if lowered in c or c in lowered][:1]
+      hint = f" (did you mean '{by_lower[hits[0]]}'?)" if hits else ""
+      described.append(f"'{key}'{hint}")
+    raise ValueError(
+        f"{param}: key(s) {', '.join(described)} are not in d_cols"
+        f" {list(self.d_cols)}. Every key must be a treatment listed in d_cols"
+        " (a lag such as '<col>_l1' needs its own entry); any other key would"
+        " be ignored silently."
+    )
 
   def _validate_columns(self, df: pd.DataFrame) -> None:
     """Checks that every user-specified column exists in ``df``.
@@ -1086,6 +1172,538 @@ class CausalWorkflowOrchestrator:
                 " its name, but is not included in treatment_spend_cols or"
                 " opt_other_cost_variables."
             )
+
+  # --------------------------------------------------------------------
+  # `price` treatments: benchmark price, gap and price investment.
+  # Vocabulary and rules: `preprocessing.price_benchmark` and
+  # docs/advanced.md ("Price treatments").
+  # --------------------------------------------------------------------
+
+  def _restore_price_config(self) -> None:
+    """Undoes the renames of the previous run's `_apply_price_treatments`.
+
+    `_apply_price_treatments` replaces `price` treatments in `d_cols`,
+    `treatment_types`, `treatment_spend_cols` and `x_cols_list` by their gap
+    columns; a second `run_full_pipeline` must start from the configuration
+    the caller gave, not from the renamed one.
+    """
+    backup = self._price_config_backup
+    if backup is None:
+      return
+    self.d_cols = list(backup["d_cols"])
+    self.treatment_types = dict(backup["treatment_types"])
+    self.treatment_spend_cols = dict(backup["treatment_spend_cols"])
+    self.x_cols_list = [list(cols) for cols in backup["x_cols_list"]]
+    self.price_benchmark_specs = dict(backup["price_benchmark_specs"])
+    self._price_config_backup = None
+
+  def _price_group_cols(self, df: pd.DataFrame) -> List[str]:
+    """The columns defining a group: `item_col` and `geo_col`, those set."""
+    return [c for c in (self.item_col, self.geo_col) if c and c in df.columns]
+
+  def _price_spec_for(
+      self, base: str, members: List[str]
+  ) -> price_benchmark.BenchmarkSpec:
+    """The benchmark specification shared by a price column and its lags.
+
+    Args:
+      base: The price column (the treatment, or the column its lags are made
+        from).
+      members: The `price` treatments that are `base` or a lag of it.
+
+    Returns:
+      The explicit specification given on any of `members` (they must agree),
+      else the automatic one.
+
+    Raises:
+      ValueError: When two members give different explicit benchmarks.
+    """
+    explicit: Dict[str, price_benchmark.BenchmarkSpec] = {}
+    for d_col in members:
+      spec = self.price_benchmark_specs.get(d_col)
+      if spec is not None and spec.method != price_benchmark.METHOD_AUTO:
+        explicit[d_col] = spec
+    if len(set(explicit.values())) > 1:
+      described = ", ".join(
+          f"'{d}': {s.describe()}" for d, s in sorted(explicit.items())
+      )
+      raise ValueError(
+          f"Price treatments {sorted(members)} are lags of the same column"
+          f" '{base}' but specify different benchmarks ({described}). Give the"
+          " benchmark once; the lags use the benchmark of their base column."
+      )
+    if explicit:
+      return next(iter(explicit.values()))
+    return price_benchmark.BenchmarkSpec(price_benchmark.METHOD_AUTO)
+
+  def _price_investment_column(
+      self,
+      df_out: pd.DataFrame,
+      treatment: Optional[str],
+      gap: pd.Series,
+      prices: Optional[pd.Series],
+      investment_col: str,
+      source_label: str,
+  ) -> Dict[str, Any]:
+    """Creates the price investment column `C` of one gap column.
+
+    `C` is the caller's cost column (`treatment_spend_cols[treatment]`) with
+    `0` where the gap is `<= 0`, or -- without a cost column -- the automatic
+    `sales_col / p * max(D, 0)`; without `sales_col` or without a price column
+    (`as_is`) no column is created and Phase 4 skips the ROI output and the
+    optimization of the treatment as before.
+
+    Args:
+      df_out: The frame the column is added to (in place).
+      treatment: The treatment whose `treatment_spend_cols` entry applies
+        (`None` when the gap column is not a treatment itself).
+      gap: The gap `D` of every row.
+      prices: The price column `p` (`None` for an `as_is` gap).
+      investment_col: The name of the column to create.
+      source_label: The name used in the log line.
+
+    Returns:
+      The `cost_*` entries of the metadata record (`cost_column` is `None`
+      when no column was created).
+    """
+    info: Dict[str, Any] = {
+        "cost_source": "none",
+        "cost_column": None,
+        "cost_input_column": None,
+        "cost_formula": None,
+        "n_rows_cost_zeroed": 0,
+        "n_rows_sales_missing": 0,
+    }
+    user_col = (
+        self.treatment_spend_cols.get(treatment) if treatment else None
+    )
+    if user_col:
+      if user_col not in df_out.columns:
+        raise ValueError(
+            f"Specified spend column '{user_col}' for treatment"
+            f" '{treatment}' not found in dataframe."
+        )
+      values, counts = price_benchmark.investment(gap, cost=df_out[user_col])
+      info.update(counts)
+      info["cost_source"] = "user"
+      info["cost_input_column"] = user_col
+      info["cost_formula"] = f"{user_col} where {gap.name} > 0, else 0"
+      note = (
+          f"treatment_spend_cols['{treatment}'] = '{user_col}';"
+          f" {counts['n_rows_cost_zeroed']} row(s) with {gap.name} <= 0 set"
+          " to 0"
+      )
+    elif prices is None:
+      print(
+          f"  ├─ '{source_label}': no price investment column (the column is"
+          " already a gap, so the quantity sales / price cannot be computed;"
+          " give treatment_spend_cols to get the ROI output).",
+          flush=True,
+      )
+      return info
+    elif self.sales_col and self.sales_col in df_out.columns:
+      values, counts = price_benchmark.investment(
+          gap, sales=df_out[self.sales_col], prices=prices
+      )
+      info.update(counts)
+      info["cost_source"] = "auto"
+      info["cost_input_column"] = self.sales_col
+      info["cost_formula"] = (
+          f"{self.sales_col} / {prices.name} * max({gap.name}, 0)"
+      )
+      note = (
+          f"computed as {info['cost_formula']} (sales_col must be the sales"
+          f" amount at price {prices.name}; give treatment_spend_cols"
+          " otherwise)"
+      )
+      if counts["n_rows_sales_missing"]:
+        note += (
+            f"; {counts['n_rows_sales_missing']} row(s) with NaN"
+            f" {self.sales_col} set to 0"
+        )
+    else:
+      print(
+          f"  ├─ '{source_label}': no price investment column (sales_col is"
+          " not set; give sales_col or treatment_spend_cols to get the ROI"
+          " output).",
+          flush=True,
+      )
+      return info
+    df_out[investment_col] = values
+    info["cost_column"] = investment_col
+    print(f"  ├─ '{source_label}': {investment_col} = {note}.", flush=True)
+    return info
+
+  def _write_price_benchmark_table(
+      self,
+      df_out: pd.DataFrame,
+      base: str,
+      benchmark_col: str,
+      resolved: price_benchmark.BenchmarkSpec,
+      group_cols: List[str],
+  ) -> None:
+    """Writes the benchmark values of a price column to a CSV file.
+
+    The file is `price_benchmark/<base>_benchmark.csv` under `output_dir`:
+    one row per group, or per group and date when the benchmark varies over
+    time (`rolling_max` and column benchmarks).
+
+    Args:
+      df_out: The frame holding the benchmark column.
+      base: The price column the benchmark belongs to.
+      benchmark_col: The benchmark column.
+      resolved: The resolved benchmark specification.
+      group_cols: The columns defining a group.
+    """
+    cols = list(group_cols)
+    if (
+        resolved.is_time_varying()
+        and self.date_col
+        and self.date_col in df_out.columns
+    ):
+      cols.append(self.date_col)
+    cols.append(benchmark_col)
+    table = df_out[cols].drop_duplicates()
+    if group_cols:
+      table = table.sort_values(by=cols[:-1], kind="stable")
+    out_dir = os.path.join(self.output_dir, "price_benchmark")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{base}_benchmark.csv")
+    table.to_csv(path, index=False)
+    print(f"  ├─ '{base}': benchmark table saved: {path}", flush=True)
+
+  def _apply_price_treatments(
+      self, df: pd.DataFrame, scaler: scalers.CausalDataScaler
+  ) -> pd.DataFrame:
+    """Replaces every `price` treatment by its gap from a benchmark price.
+
+    For each `price` treatment `d` (and the lags `d_l<n>` of a price column,
+    which share the benchmark of their base column):
+
+    1. the benchmark `b` is resolved: the `benchmark` of
+       `treatment_types[d]`, or -- when none is given -- `as_is` if the
+       column has a value `<= 0` (it is a gap already) and the group maximum
+       `q_100` otherwise (a warning names the decision);
+    2. `as_is` leaves the treatment unchanged; otherwise the columns
+       `<d>_benchmark` (`b`) and `<d>_gap` (`D = b - p`) are added, the
+       treatment is renamed to `<d>_gap` in `d_cols`, `treatment_types` and
+       `treatment_spend_cols`, and `<d>_benchmark` is added to the `x_cols`
+       of the treatment (not for a constant benchmark). A lag `d_l<n>` gets
+       `<d>_gap_l<n>`, the gap of the same group `n` periods earlier (`0` when
+       that row does not exist);
+    3. the price investment `<d>_investment` is created when possible (see
+       `_price_investment_column`) and becomes the treatment's
+       `treatment_spend_cols` entry;
+    4. if the price column is listed in one of the scaler's column lists, the
+       gap and benchmark columns are added to the same list.
+
+    Rows with `D < 0` keep their negative gap in the estimation and count as
+    zero investment in the ROI and the optimization. The caller's `df` is not
+    modified; `metadata.json["price_benchmarks"]` records every decision.
+
+    Args:
+      df: The input DataFrame (after `_validate_columns`).
+      scaler: The scaler of the run (its column lists are extended in place).
+
+    Returns:
+      A copy of `df` with the new columns, or `df` itself when there is no
+      `price` treatment.
+
+    Raises:
+      ValueError: For a benchmark keyword used as a column name, a lagged
+        price treatment without its base column or without `date_col`,
+        conflicting benchmarks among the lags of one column, a missing
+        benchmark column, or a price `<= 0` when the investment is computed
+        automatically.
+    """
+    self._price_benchmark_records = {}
+    price_cols = [
+        d
+        for d in self.d_cols
+        if self.treatment_types.get(d) == price_benchmark.PRICE_TYPE
+    ]
+    if not price_cols:
+      return df
+    collisions = price_benchmark.reserved_column_collisions(df)
+    if collisions:
+      raise ValueError(
+          f"Column name(s) {collisions} coincide with a benchmark keyword"
+          " ('as_is', 'rolling_max', 'q_<k>') and could not be named as a"
+          " benchmark column; please rename them."
+      )
+    self._price_config_backup = {
+        "d_cols": list(self.d_cols),
+        "treatment_types": dict(self.treatment_types),
+        "treatment_spend_cols": dict(self.treatment_spend_cols),
+        "x_cols_list": [list(cols) for cols in self.x_cols_list],
+        "price_benchmark_specs": dict(self.price_benchmark_specs),
+    }
+    df_out = df.copy()
+    group_cols = self._price_group_cols(df_out)
+    print(
+        "\n=== Price treatments: benchmark price, gap and price investment ===",
+        flush=True,
+    )
+    if group_cols:
+      print(f"  ├─ group = {group_cols}", flush=True)
+    else:
+      message = (
+          "Neither item_col nor geo_col is set: the benchmark of the price"
+          " treatment(s) is computed over all rows as one group."
+      )
+      print(f"  ├─ [Warning] {message}", flush=True)
+      warnings.warn(message, UserWarning)
+
+    bases: Dict[str, List[str]] = {}
+    for d_col in price_cols:
+      base, _ = price_benchmark.split_lag(d_col)
+      bases.setdefault(base, []).append(d_col)
+
+    renames: Dict[str, str] = {}
+    spend_updates: Dict[str, str] = {}
+    benchmark_of: Dict[str, str] = {}
+    records: Dict[str, Dict[str, Any]] = {}
+    delta: Optional[pd.Timedelta] = None
+    for base, members in bases.items():
+      lag_members = [d for d in members if price_benchmark.split_lag(d)[1]]
+      spec = self._price_spec_for(base, members)
+      if spec.method == price_benchmark.METHOD_AS_IS:
+        # Nothing is computed from the price column, which need not exist.
+        resolved = spec
+      else:
+        if base not in df_out.columns:
+          raise ValueError(
+              f"Price treatment(s) {members} are lags of column '{base}',"
+              " which is not a column of the DataFrame; the benchmark and the"
+              " gap are computed from that column."
+          )
+        resolved = price_benchmark.resolve_auto(spec, df_out[base])
+      if (
+          resolved.method != price_benchmark.METHOD_AS_IS
+          and lag_members
+          and not (self.date_col and self.date_col in df_out.columns)
+      ):
+        raise ValueError(
+            f"Lagged price treatment(s) {lag_members} require date_col: the"
+            " gap of a lag is the gap of the same group n periods earlier."
+        )
+      resolution = (
+          "auto" if spec.method == price_benchmark.METHOD_AUTO else "explicit"
+      )
+      if resolution == "auto":
+        if resolved.method == price_benchmark.METHOD_AS_IS:
+          reason = (
+              "its smallest value is <= 0, so it is taken to be a gap"
+              " (benchmark - price) already and is used as is"
+          )
+        else:
+          reason = (
+              "all its values are > 0, so it is taken to be a price and the"
+              f" group maximum ({resolved.describe()}) is the benchmark"
+          )
+        message = (
+            f"treatment_types['{base}'] gives no benchmark for the price"
+            f" treatment: {reason}. Set treatment_types['{base}'] ="
+            " {'type': 'price', 'benchmark': ...} to choose explicitly."
+        )
+        print(f"  ├─ [Warning] {message}", flush=True)
+        warnings.warn(message, UserWarning)
+      print(
+          f"  ├─ '{base}': benchmark = {resolved.describe()} ({resolution})",
+          flush=True,
+      )
+
+      if resolved.method == price_benchmark.METHOD_AS_IS:
+        for d_col in members:
+          _, lag = price_benchmark.split_lag(d_col)
+          counts = price_benchmark.gap_counts(df_out[d_col])
+          self._warn_negative_gaps(d_col, counts["n_rows_gap_negative"])
+          cost = self._price_investment_column(
+              df_out,
+              treatment=d_col,
+              gap=df_out[d_col],
+              prices=None,
+              investment_col=price_benchmark.output_names(base, lag)[
+                  "investment"
+              ],
+              source_label=d_col,
+          )
+          if cost["cost_column"]:
+            spend_updates[d_col] = cost["cost_column"]
+          records[d_col] = {
+              "source_column": base,
+              "lag": lag,
+              "treatment_column": d_col,
+              "benchmark": resolved.to_metadata(),
+              "benchmark_resolution": resolution,
+              "benchmark_column": None,
+              "group_cols": list(group_cols),
+              **counts,
+              **cost,
+          }
+        continue
+
+      prices = pd.to_numeric(df_out[base], errors="coerce").astype(float)
+      names = price_benchmark.output_names(base)
+      benchmark = price_benchmark.compute_benchmark(
+          df_out, base, resolved, group_cols, self.date_col
+      )
+      df_out[names["benchmark"]] = benchmark
+      df_out[names["gap"]] = benchmark - prices
+      base_cost = self._price_investment_column(
+          df_out,
+          treatment=base if base in members else None,
+          gap=df_out[names["gap"]],
+          prices=prices,
+          investment_col=names["investment"],
+          source_label=base,
+      )
+      self._write_price_benchmark_table(
+          df_out, base, names["benchmark"], resolved, group_cols
+      )
+      for d_col in members:
+        _, lag = price_benchmark.split_lag(d_col)
+        if lag:
+          if delta is None:
+            delta = price_benchmark.period_delta(
+                df_out, self.date_col, group_cols
+            )
+          lag_names = price_benchmark.output_names(base, lag)
+          df_out[lag_names["gap"]] = price_benchmark.shift_within_groups(
+              df_out, names["gap"], lag, self.date_col, group_cols, delta
+          )
+          print(
+              f"  ├─ '{d_col}': {lag_names['gap']} = {names['gap']} of the"
+              f" same group {lag} period(s) earlier (period = {delta}; 0 when"
+              " that row does not exist)",
+              flush=True,
+          )
+          if self.treatment_spend_cols.get(d_col):
+            cost = self._price_investment_column(
+                df_out,
+                treatment=d_col,
+                gap=df_out[lag_names["gap"]],
+                prices=None,
+                investment_col=lag_names["investment"],
+                source_label=d_col,
+            )
+          elif base_cost["cost_column"]:
+            df_out[lag_names["investment"]] = (
+                price_benchmark.shift_within_groups(
+                    df_out,
+                    base_cost["cost_column"],
+                    lag,
+                    self.date_col,
+                    group_cols,
+                    delta,
+                )
+            )
+            cost = dict(base_cost)
+            cost["cost_column"] = lag_names["investment"]
+            cost["cost_formula"] = (
+                f"{base_cost['cost_column']} of the same group {lag}"
+                " period(s) earlier, 0 when that row does not exist"
+            )
+            print(
+                f"  ├─ '{d_col}': {lag_names['investment']} ="
+                f" {cost['cost_formula']}.",
+                flush=True,
+            )
+          else:
+            cost = dict(base_cost)
+          gap_col = lag_names["gap"]
+        else:
+          cost = base_cost
+          gap_col = names["gap"]
+        counts = price_benchmark.gap_counts(df_out[gap_col])
+        self._warn_negative_gaps(gap_col, counts["n_rows_gap_negative"])
+        renames[d_col] = gap_col
+        if cost["cost_column"]:
+          spend_updates[gap_col] = cost["cost_column"]
+        if resolved.method != price_benchmark.METHOD_CONSTANT:
+          benchmark_of[gap_col] = names["benchmark"]
+        records[gap_col] = {
+            "source_column": base,
+            "lag": lag,
+            "treatment_column": gap_col,
+            "benchmark": resolved.to_metadata(),
+            "benchmark_resolution": resolution,
+            "benchmark_column": names["benchmark"],
+            "group_cols": list(group_cols),
+            **counts,
+            **cost,
+        }
+      self._extend_scaler_lists(
+          scaler, base, [names["gap"], names["benchmark"]]
+      )
+
+    # The renames: d_cols, treatment_types, treatment_spend_cols, the
+    # benchmark specifications and the x_cols of the renamed treatments.
+    self.d_cols = [renames.get(d, d) for d in self.d_cols]
+    self.treatment_types = {
+        renames.get(d, d): t for d, t in self.treatment_types.items()
+    }
+    self.price_benchmark_specs = {
+        renames.get(d, d): s for d, s in self.price_benchmark_specs.items()
+    }
+    spend_cols = {
+        renames.get(d, d): c for d, c in self.treatment_spend_cols.items()
+    }
+    spend_cols.update(spend_updates)
+    self.treatment_spend_cols = spend_cols
+    for idx, d_col in enumerate(self.d_cols):
+      benchmark_col = benchmark_of.get(d_col)
+      if benchmark_col is None:
+        continue
+      if benchmark_col not in self.x_cols_list[idx]:
+        self.x_cols_list[idx] = list(self.x_cols_list[idx]) + [benchmark_col]
+        print(
+            f"  ├─ '{d_col}': '{benchmark_col}' added to x_cols"
+            f" (x_cols_list[{idx}])",
+            flush=True,
+        )
+    self._price_benchmark_records = records
+    return df_out
+
+  def _warn_negative_gaps(self, gap_col: str, n_negative: int) -> None:
+    """Warns about rows whose price is above the benchmark."""
+    if n_negative <= 0:
+      return
+    message = (
+        f"{n_negative} row(s) of '{gap_col}' have a negative gap (price above"
+        " the benchmark). They enter the estimation with their negative gap"
+        " and count as zero investment in the ROI output and the"
+        " optimization."
+    )
+    print(f"  ├─ [Warning] {message}", flush=True)
+    warnings.warn(message, UserWarning)
+
+  def _extend_scaler_lists(
+      self,
+      scaler: scalers.CausalDataScaler,
+      base: str,
+      new_cols: List[str],
+  ) -> None:
+    """Adds `new_cols` to every scaler list that names the price column."""
+    for list_name in (
+        "standardize_cols",
+        "population_standardize_cols",
+        "population_median_normalize_cols",
+        "min_max_cols",
+        "median_normalize_cols",
+    ):
+      cols = getattr(scaler, list_name, None)
+      if not cols or base not in cols:
+        continue
+      added = [c for c in new_cols if c not in cols]
+      if not added:
+        continue
+      cols.extend(added)
+      print(
+          f"  ├─ '{base}' is in scaler.{list_name}: {added} added to the same"
+          " list",
+          flush=True,
+      )
 
   def _monitor_phase0_progress(
       self,
@@ -3437,7 +4055,15 @@ class CausalWorkflowOrchestrator:
           " `df = df.reset_index(drop=True)` (or set a unique index) before"
           " run_full_pipeline."
       )
+    # A previous run may have renamed the `price` treatments to their gap
+    # columns; start from the configuration the caller gave.
+    self._restore_price_config()
     self._validate_columns(df)
+    # `price` treatments: benchmark price, gap (the treatment from here on)
+    # and price investment.  `df` is not modified; the returned frame carries
+    # the new columns and `d_cols` / `treatment_types` /
+    # `treatment_spend_cols` / `x_cols_list` are renamed accordingly.
+    df = self._apply_price_treatments(df, scaler)
     self._validate_treatments(df)
     actual_cores = os.cpu_count() if self.n_jobs == -1 else self.n_jobs
     print(
@@ -5095,6 +5721,13 @@ class CausalWorkflowOrchestrator:
         "treatment_types": self.treatment_types,
         "treatment_spend_cols": getattr(self, "treatment_spend_cols", {}),
         "treatment_spend_totals": treatment_spend_totals,
+        # One record per `price` treatment (by its gap column): the benchmark
+        # specification and how it was resolved, the benchmark column, the
+        # numbers of rows with a zero / negative gap and the price investment
+        # column with its source.  Empty without `price` treatments.
+        "price_benchmarks": saturation_evaluation.to_jsonable(
+            dict(self._price_benchmark_records)
+        ),
         "geo_col": self.geo_col,
         "item_col": self.item_col,
         "geo_name_col": self.geo_name_col,
@@ -5116,6 +5749,12 @@ class CausalWorkflowOrchestrator:
         "saturation_family": self.sat_family,
         "saturation_alpha": dict(self._alpha_hat),
         "simple_optimization": self.simple_optimization,
+        # The user's selection (`None` = derived from the saturation family),
+        # the derived value and whether it was forced to True (non-spend
+        # treatment); the HTML header shows them next to the value in force.
+        "simple_optimization_requested": self.simple_optimization_requested,
+        "simple_optimization_derived": self.simple_optimization_derived,
+        "simple_optimization_forced": self.simple_optimization_forced,
         "budget_increment": self.budget_increment,
         "budget_mode": self.budget_mode,
         "budget_reallocate": self.budget_reallocate,

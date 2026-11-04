@@ -74,6 +74,58 @@ def _png_data_uri(path: str) -> str:
     return ""
 
 
+def _png_width(path: str) -> int | None:
+  """Returns the pixel width of a PNG file from its IHDR chunk, or None.
+
+  The width is read from the file header (bytes 16-20 of a PNG file), so no
+  image library is needed.
+
+  Args:
+    path: Path of the PNG file.
+
+  Returns:
+    The width in pixels, or ``None`` when the file is missing or not a PNG.
+  """
+  try:
+    with open(path, "rb") as img_file:
+      header = img_file.read(24)
+  except OSError:
+    return None
+  if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+    return None
+  return int.from_bytes(header[16:20], "big")
+
+
+def _cate_image_widths(paths: list[str]) -> list[str]:
+  """CSS widths that display the CATE pngs at one common scale.
+
+  The scatter matrix and the response curves are drawn with cells of the
+  same size (``plots._CATE_CELL_IN``) but have different numbers of columns,
+  so their pngs differ in width.  Shown at the same display width they would
+  be scaled by different factors and their cells and fonts would no longer
+  match.  The widest png takes the full report width and every other one a
+  width proportional to its own pixel width, so that one image pixel maps to
+  the same screen size in both charts.
+
+  Args:
+    paths: The png paths, in display order.
+
+  Returns:
+    One ``width: <pct>%`` CSS declaration per path (``width: 100%`` for a
+    missing png, which the report hides anyway).
+  """
+  widths = [_png_width(p) for p in paths]
+  known = [w for w in widths if w]
+  widest = max(known) if known else None
+  styles = []
+  for width in widths:
+    if width and widest:
+      styles.append(f"width: {100.0 * width / widest:.2f}%")
+    else:
+      styles.append("width: 100%")
+  return styles
+
+
 def _fmt_num(value, digits: int = 4) -> str:
   """Formats a JSON number for the descriptive block (``n/a`` for null)."""
   if value is None:
@@ -82,6 +134,152 @@ def _fmt_num(value, digits: int = 4) -> str:
     return f"{float(value):.{digits}g}"
   except (TypeError, ValueError):
     return str(value)
+
+
+def _price_type_suffix(ttype: str, record: dict[str, Any] | None) -> str:
+  """The benchmark shown after ``price`` in the ``Treatment Types`` row.
+
+  Args:
+    ttype: The treatment type.
+    record: The treatment's ``metadata["price_benchmarks"]`` record, or
+      ``None`` (not a price treatment, or older metadata).
+
+  Returns:
+    `` (benchmark: q_95)``, `` (benchmark: rolling_max, window: 26W)``,
+    `` (benchmark: column 'list_price')``, `` (benchmark: constant 100)``
+    or `` (benchmark: as_is, the column is a gap already)``, with
+    ``, automatic`` appended when the benchmark was not given by the caller;
+    an empty string when there is nothing to show.
+  """
+  if ttype != "price" or not record:
+    return ""
+  spec = record.get("benchmark") or {}
+  method = spec.get("method")
+  if method == "quantile":
+    text = f"q_{spec.get('percentile')}"
+  elif method == "rolling_max":
+    text = f"rolling_max, window: {spec.get('window')}"
+  elif method == "column":
+    text = f"column '{spec.get('column')}'"
+  elif method == "constant":
+    text = f"constant {_fmt_num(spec.get('value'), 6)}"
+  elif method == "as_is":
+    text = "as_is, the column is a gap already"
+  else:
+    text = str(spec.get("description") or method or "n/a")
+  if record.get("benchmark_resolution") == "auto":
+    text += ", automatic"
+  return f" (benchmark: {text})"
+
+
+def _price_investment_suffix(record: dict[str, Any] | None) -> str:
+  """How a price treatment's spend column was built (spend-column row).
+
+  Args:
+    record: The treatment's ``metadata["price_benchmarks"]`` record, or
+      ``None`` (not a price treatment, or older metadata).
+
+  Returns:
+    `` (not specified; computed from the benchmark: <formula>)`` when no
+    ``treatment_spend_cols`` entry was given (``cost_source`` ``auto``),
+    `` (from treatment_spend_cols '<column>': <formula>)`` when one was
+    (``user``); an empty string otherwise (no record, or no investment
+    column: ``cost_source`` ``none``).
+  """
+  if not record:
+    return ""
+  formula = record.get("cost_formula") or "n/a"
+  source = record.get("cost_source")
+  if source == "auto":
+    return f" (not specified; computed from the benchmark: {formula})"
+  if source == "user":
+    return (
+        f" (from treatment_spend_cols '{record.get('cost_input_column')}':"
+        f" {formula})"
+    )
+  return ""
+
+
+def _simple_optimization_text(
+    metadata: dict[str, Any], phase4_optimization: dict[str, Any]
+) -> str:
+  """The ``Simple Optimization`` row of the report header.
+
+  Shows the user's selection (the ``simple_optimization`` argument) and the
+  final decision -- whether the simple optimizer ran -- with the reason when
+  the two differ::
+
+      user selection: False | final decision: True (linear fallback: Phase 0
+      selected linear for tv_spend)
+
+  The final decision is ``True`` for every treatment when
+  ``simple_optimization`` was in force (selected, derived from the saturation
+  family, or forced for a non-spend treatment); otherwise it is ``True`` for
+  the treatments whose Phase 4 fell back to the simple optimizer
+  (``phase4_fallback_to_linear``) and ``False`` for the others, listed per
+  treatment when they disagree.
+
+  Args:
+    metadata: The run's ``metadata.json``: ``simple_optimization`` (value in
+      force), ``treatment_cols``, and -- newer runs --
+      ``simple_optimization_requested`` (the constructor argument, ``None`` =
+      not set), ``simple_optimization_derived`` (the default derived from the
+      saturation family) and ``simple_optimization_forced`` (forced to True
+      for a non-spend treatment).
+    phase4_optimization: ``metadata["phase4_optimization"]``; a treatment
+      with ``phase4_fallback_to_linear`` took the simple optimizer.
+
+  Returns:
+    The row text (``n/a`` when the value in force is unknown).
+  """
+  in_force = metadata.get("simple_optimization")
+  if in_force is None:
+    return "n/a"
+  in_force = bool(in_force)
+
+  # The user's selection.
+  if "simple_optimization_requested" not in metadata:
+    user_txt = "n/a (older metadata)"
+  else:
+    requested = metadata.get("simple_optimization_requested")
+    if requested is not None:
+      user_txt = str(bool(requested))
+    else:
+      derived = metadata.get("simple_optimization_derived")
+      if derived is None:
+        user_txt = "not set"
+      elif derived:
+        user_txt = "not set (default True: no saturation family)"
+      else:
+        user_txt = (
+            "not set (default False: a saturation family is configured)"
+        )
+
+  # The final decision, per treatment.
+  fallback = [
+      t
+      for t, info in (phase4_optimization or {}).items()
+      if (info or {}).get("phase4_fallback_to_linear")
+  ]
+  treatments = [str(t) for t in (metadata.get("treatment_cols") or [])]
+  for t in list((phase4_optimization or {}).keys()) + fallback:
+    if str(t) not in treatments:
+      treatments.append(str(t))
+  decisions = {t: in_force or t in fallback for t in treatments}
+  if not decisions or len(set(decisions.values())) == 1:
+    final_txt = str(in_force or bool(fallback))
+  else:
+    final_txt = ", ".join(f"{t}: {v}" for t, v in decisions.items())
+  reasons = []
+  if in_force and metadata.get("simple_optimization_forced"):
+    reasons.append("forced: non-spend treatment")
+  if fallback and not in_force:
+    reasons.append(
+        f"linear fallback: Phase 0 selected linear for {', '.join(fallback)}"
+    )
+  if reasons:
+    final_txt += f" ({'; '.join(reasons)})"
+  return f"user selection: {user_txt} | final decision: {final_txt}"
 
 
 def _phase0_tab_html(
@@ -233,6 +431,9 @@ def generate_html_report(output_dir: str) -> str | None:
   treatment_types = metadata.get("treatment_types", {})
   treatment_spend_cols = metadata.get("treatment_spend_cols", {})
   treatment_spend_totals = metadata.get("treatment_spend_totals", {})
+  # One record per `price` treatment (by its gap column): the benchmark and
+  # how the investment column was built.  Empty without a price treatment.
+  price_benchmarks = metadata.get("price_benchmarks") or {}
   geo_col = metadata.get("geo_col")
   geo_col_str = str(geo_col) if geo_col else "None"
   item_col = metadata.get("item_col")
@@ -510,8 +711,11 @@ def generate_html_report(output_dir: str) -> str | None:
   item_index_map = {item: f"{(i+1):03d}" for i, item in enumerate(items)}
 
   treatment_str = ", ".join(treatment_cols)
+  # A `price` treatment is shown with its benchmark (and window) and its
+  # spend column with the way it was built, from `price_benchmarks`.
   treatment_types_str = ", ".join(
-      [f"{k}: {v}" for k, v in treatment_types.items()]
+      f"{k}: {v}" + _price_type_suffix(v, price_benchmarks.get(k))
+      for k, v in treatment_types.items()
   )
   treatment_vars_html = (
       f"<strong>Treatment Variable(s):</strong> {treatment_str} <br>\n"
@@ -519,7 +723,10 @@ def generate_html_report(output_dir: str) -> str | None:
       f"{treatment_types_str}"
   )
   if has_other_treatment and treatment_spend_cols:
-    spend_cols_list = [f"{k}: {v}" for k, v in treatment_spend_cols.items()]
+    spend_cols_list = [
+        f"{k}: {v}" + _price_investment_suffix(price_benchmarks.get(k))
+        for k, v in treatment_spend_cols.items()
+    ]
     spend_cols_str = ", ".join(spend_cols_list)
     treatment_vars_html += (
         " <br>\n            <strong>Treatment Spend Col(s):</strong> "
@@ -731,19 +938,9 @@ def generate_html_report(output_dir: str) -> str | None:
       metadata.get("saturation_selected_family") or {}
   )
 
-  # Reported in the header: True = the simple ROI-threshold optimizer, False
-  # = the saturation-aware optimizer.  Older metadata files lack the key.
-  simple_optimization_flag = metadata.get("simple_optimization")
-  simple_optimization_str = (
-      "n/a" if simple_optimization_flag is None else str(
-          bool(simple_optimization_flag)
-      )
-  )
-
-  # Reported in the header: the Phase 0 outcome per treatment --
-  # `selected_family` (the saturation family adopted for the treatment; None
-  # when the 1-SE test kept it linear) and `decision` ("saturation" /
-  # "linear").  Without a configured family there is no Phase 0 and the
+  # Reported in the header: the Phase 0 outcome per treatment -- `decision`
+  # ("saturation" / "linear") with the family adopted when it is
+  # "saturation".  Without a configured family there is no Phase 0 and the
   # treatment enters the PLR linearly.
   def per_treatment_str(values):
     """Renders ``{treatment: value}``; the bare value with one treatment."""
@@ -753,17 +950,36 @@ def generate_html_report(output_dir: str) -> str | None:
       return str(next(iter(values.values())))
     return ", ".join(f"{t}: {v}" for t, v in values.items())
 
+  def decision_text(info):
+    """``saturation (<family>)`` or ``linear`` of one Phase 0 record."""
+    info = info or {}
+    decision = info.get("decision")
+    # Phase 0 adopts a family exactly when its decision is "saturation"
+    # (`selected_family` is that family, None for "linear").
+    if decision == "saturation":
+      return f"saturation ({info.get('selected_family')})"
+    return str(decision)
+
+  # `Selected family` is the family the user configured
+  # (`saturation_config['saturation']['family']`); the family Phase 0 adopted
+  # per treatment is shown with the decision.
   if saturation_family:
-    selected_family_str = per_treatment_str({
-        t: (info or {}).get("selected_family")
-        for t, info in saturation_phase0.items()
-    })
-    decision_str = per_treatment_str({
-        t: (info or {}).get("decision") for t, info in saturation_phase0.items()
-    })
+    selected_family_str = str(saturation_family)
+    decision_str = per_treatment_str(
+        {t: decision_text(info) for t, info in saturation_phase0.items()}
+    )
   else:
     selected_family_str = "None (no saturation family configured)"
     decision_str = "linear"
+
+  # `Simple Optimization`: the user's selection (`simple_optimization`
+  # argument; not set = derived from the saturation family) and the final
+  # decision -- whether the simple optimizer ran: the value in force (forced
+  # to True for non-spend treatments) or, when that is False, the Phase 4
+  # linear fallback per treatment.
+  simple_optimization_str = _simple_optimization_text(
+      metadata, phase4_optimization
+  )
 
   # 000_saturation tab (saturation runs only).
   phase0_button = ""
@@ -952,11 +1168,26 @@ def generate_html_report(output_dir: str) -> str | None:
     </div>
 """
 
+  # The two CATE charts are drawn with cells of one size; display them at one
+  # common scale so their cells and fonts match on screen (the widest png
+  # takes the full width, the other a proportional share).
+  cate_rel_paths = [
+      "step4_consolidated_results/graph/004_cate/cate_scatter_matrix.png",
+      "step4_consolidated_results/graph/004_cate/cate_response_curves.png",
+  ]
+  cate_styles = _cate_image_widths(
+      [os.path.join(output_dir, p) for p in cate_rel_paths]
+  )
+  cate_images_html = "\n".join(
+      f'        <img class="chart-img" style="{style}"'
+      f' src="{get_b64(rel_path)}" onclick="expandImage(this.src)"'
+      " onerror=\"this.style.display='none'\">"
+      for rel_path, style in zip(cate_rel_paths, cate_styles)
+  )
   html += f"""
     <div id="tab_004_cate" class="tab-content">
         <h3>CATE Estimation</h3>
-        <img class="chart-img" src="{get_b64('step4_consolidated_results/graph/004_cate/cate_scatter_matrix.png')}" onclick="expandImage(this.src)" onerror="this.style.display='none'">
-        <img class="chart-img" src="{get_b64('step4_consolidated_results/graph/004_cate/cate_response_curves.png')}" onclick="expandImage(this.src)" onerror="this.style.display='none'">
+{cate_images_html}
     </div>
 """
 

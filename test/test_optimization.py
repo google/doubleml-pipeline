@@ -38,8 +38,9 @@
   columns, the statistics columns of ``optimization_metrics.csv`` and the
   ``treatment_types="spend"`` charts shared with the simple optimizer.
 
-The orchestrator's validation of the optimization settings (``opt_threshold_roi``,
-``budget_mode``, ``cap_quantile``, ``opt_geos``, ...) is covered by
+The orchestrator's validation of the optimization settings
+(``opt_threshold_roi``, ``budget_mode``, ``cap_quantile``, ``opt_geos``, ...)
+is covered by
 test_workflow.py.
 """
 
@@ -271,6 +272,120 @@ class SimpleOptimizerTest(unittest.TestCase):
     self.assertEqual(
         set(frame["dimension"]), {"total", "geo", "item"}
     )
+
+  @mock.patch("matplotlib.pyplot.close")
+  def test_optimization_period_is_shaded_on_every_chart(self, mock_close):
+    """A light-green band labelled 'Optimization Period' spans the period."""
+    del mock_close
+    import matplotlib.dates as mdates  # pylint: disable=g-import-not-at-top
+    import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
+    # pylint: disable=protected-access
+
+    dates = pd.to_datetime(["2020-01-06", "2020-01-13", "2020-01-20"])
+    start, end = dates[1], dates[2]
+
+    def shaded_spans(ax):
+      """The (label, facecolor alpha) of the period band(s) of ``ax``."""
+      return [
+          (p.get_label(), p.get_facecolor()[3])
+          for p in ax.patches
+          if p.get_label() == optimization._PERIOD_LABEL
+      ]
+
+    # One-panel line chart.
+    with mock.patch.object(plt.Figure, "savefig"):
+      optimization._timeseries_line_chart(
+          dates,
+          [([1.0, 2.0, 3.0], "red", "a")],
+          "unused.png",
+          "title",
+          start,
+          end,
+      )
+      (ax,) = plt.gcf().axes
+    self.assertEqual(shaded_spans(ax), [(optimization._PERIOD_LABEL, 0.25)])
+    band = [
+        p for p in ax.patches if p.get_label() == optimization._PERIOD_LABEL
+    ][0]
+    # `axvspan` returns a Rectangle (older matplotlib: a Polygon).
+    if hasattr(band, "get_width"):
+      x_min = band.get_x()
+      x_max = band.get_x() + band.get_width()
+    else:
+      x_values = np.asarray(band.get_xy())[:, 0]
+      x_min, x_max = x_values.min(), x_values.max()
+    self.assertAlmostEqual(x_min, mdates.date2num(start.to_pydatetime()))
+    self.assertAlmostEqual(x_max, mdates.date2num(end.to_pydatetime()))
+    self.assertEqual(band.get_zorder(), 0)
+    # The band is in the legend; the dashed edges are drawn as well.
+    self.assertIn(
+        optimization._PERIOD_LABEL,
+        [t.get_text() for t in ax.get_legend().get_texts()],
+    )
+    dashed = [ln for ln in ax.get_lines() if ln.get_linestyle() == "--"]
+    self.assertEqual(len(dashed), 2)
+
+    # Two stacked before / after panels: both are shaded.
+    with mock.patch.object(plt.Figure, "savefig"):
+      optimization.plot_spend_before_after(
+          pd.DataFrame({
+              "Date": dates,
+              "Spend": [10.0, 50.0, 30.0],
+              "opt_spend": [10.0, 0.0, 30.0],
+          }),
+          date_col="Date",
+          spend_col="Spend",
+          opt_spend_col="opt_spend",
+          out_path="unused.png",
+          title_prefix="Total",
+          spend_label="Spend (Spend)",
+          threshold_roi=1.0,
+          start_date=start,
+          end_date=end,
+      )
+      panels = plt.gcf().axes
+    self.assertEqual(len(panels), 2)
+    for ax in panels:
+      self.assertEqual(shaded_spans(ax), [(optimization._PERIOD_LABEL, 0.25)])
+    # Without a period nothing is drawn.
+    fig, ax = plt.subplots()
+    optimization._mark_period(ax, None, None)
+    self.assertEqual(shaded_spans(ax), [])
+    plt.close(fig)
+
+  @mock.patch("matplotlib.figure.Figure.savefig")
+  def test_optimize_marks_the_period_on_the_spend_vs_est_chart(
+      self, mock_savefig
+  ):
+    """The simple optimizer's own chart carries the shaded period too."""
+    del mock_savefig
+    df = pd.DataFrame({
+        "Date": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]),
+        "Geo": ["A", "A", "A"],
+        "Item": ["X", "X", "X"],
+        "Sales": [100, 200, 300],
+        "Spend": [10, 20, 30],
+        "estimated_incremental_KPI_Spend": [15, 25, 45],
+    })
+    with tempfile.TemporaryDirectory() as out_dir, mock.patch.object(
+        optimization, "_mark_period"
+    ) as mark_period:
+      optimization.optimize(
+          df_1a_consolidated=df,
+          treatment="Spend",
+          treatment_amt="Spend",
+          periods=("2020-01-01", "2020-01-02"),
+          threshold_roi=1.0,
+          out_dir=out_dir,
+      )
+    # Per dimension (total, geo A, item X): the spend_vs_est panel and the
+    # 2 x 3 before / after panels -> 7 marked panels each, all with the
+    # period's dates.
+    self.assertEqual(mark_period.call_count, 3 * 7)
+    for call in mark_period.call_args_list:
+      _, start, end = call.args
+      self.assertEqual(start, pd.Timestamp("2020-01-01"))
+      self.assertEqual(end, pd.Timestamp("2020-01-02"))
 
   @mock.patch("matplotlib.pyplot.close")
   def test_spend_before_after_chart_shares_the_y_scale(self, mock_close):
@@ -845,6 +960,7 @@ class BudgetAndThetaTest(unittest.TestCase):
     )
 
   def test_theta_recovered_in_kpi_units(self):
+    """theta_hat_t = KPI_t / fbar(T_t) is recovered row by row in KPI units."""
     rng = np.random.default_rng(3)
     n = 300
     treatment = np.where(
@@ -1240,6 +1356,7 @@ class SpendChartsTest(unittest.TestCase):
       )
 
   def test_chart_colors_and_labels(self):
+    """The two-line charts carry the documented colours and labels."""
     calls = []
 
     def _record(dates, series, out_path, title, start_date, end_date):
@@ -1275,6 +1392,7 @@ class SpendChartsTest(unittest.TestCase):
     )
 
   def test_missing_columns_skip_charts(self):
+    """A chart whose columns are missing from the frame is not written."""
     df_ts = self._frame().drop(columns=["optimized_sales"])
     with tempfile.TemporaryDirectory() as out_dir:
       # pylint: disable=protected-access

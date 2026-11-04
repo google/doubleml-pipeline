@@ -58,21 +58,38 @@ parallelization, model selection, and visual reporting.
 -   `ground_truth_effect_column` *(Optional[List[str]], default=[])*: Column
     names containing ground truth effects for each treatment variable. Example:
     `['true_effect_discount', 'true_effect_tv']`.
--   `treatment_types` *(Optional[Dict[str, str]], default=None)*: Treatment type
-    classification. Allowed values are `'spend'` | `'percentage'` |
-    `'impressions'` | `'price'`; the default type is `"spend"` and any other
-    value raises `ValueError` in `run_full_pipeline`. A `'percentage'`
-    treatment must hold values in `[0, 1]` and requires a `sales_col` present
-    in `df` (`ValueError` otherwise). Note: Phase 4 ROI charts are generated
-    only for `"percentage"`, `"impressions"`, or `"price"`; these charts and
-    the optimization of such a treatment require both `treatment_spend_cols`
-    and `sales_col`, otherwise they are skipped with a warning. For
-    `"spend"`, they are skipped as they are redundant with the Phase 4
-    optimization. Example:
-    `{'discount_rate': 'percentage', 'tv_spend': 'spend'}`.
+-   `treatment_types` *(Optional[Dict[str, Any]], default=None)*: Treatment type
+    classification. Each value is the type as a string — `'spend'` |
+    `'percentage'` | `'impressions'` | `'price'`; the default type is
+    `"spend"` and any other value raises `ValueError` in `run_full_pipeline`
+    — or, for a `'price'` treatment, a dict `{'type': 'price', 'benchmark':
+    ..., 'window': ...}` that also sets the benchmark price the gap is
+    measured from (`benchmark`: omitted = automatic, `'as_is'`, `'q_<k>'`,
+    `'rolling_max'` + `window` `'<n>W'` / `'<n>D'`, a number, or a benchmark
+    column name; see `preprocessing.price_benchmark` and [Price
+    treatments](advanced.md#price-treatments-benchmark-gap-and-price-investment)).
+    A `benchmark` / `window` on a type other than `'price'`, an unknown key or
+    a missing `'type'` raise `ValueError` at construction. **Every key must be
+    a treatment listed in `d_cols`** — the column name, not the type (for a
+    price column `UnitPriceSM` write `{'UnitPriceSM': {'type': 'price', ...}}`,
+    not `{'price': ...}`) — and a lag listed in `d_cols` needs its own entry;
+    a key that is not in `d_cols` (did-you-mean hint included) or a lag
+    without an entry whose base column has a non-`'spend'` one raise
+    `ValueError` at construction instead of being ignored silently. A
+    `'percentage'` treatment must hold values in `[0, 1]` and requires a
+    `sales_col` present in `df` (`ValueError` otherwise). Note: Phase 4 ROI
+    charts are generated only for `"percentage"`, `"impressions"`, or
+    `"price"`; these charts and the optimization of such a treatment require
+    both `treatment_spend_cols` and `sales_col`, otherwise they are skipped
+    with a warning (a `'price'` treatment gets its `treatment_spend_cols`
+    entry built from `sales_col` when none is given). For `"spend"`, they are
+    skipped as they are redundant with the Phase 4 optimization. Example:
+    `{'discount_rate': 'percentage', 'tv_spend': 'spend', 'price': {'type':
+    'price', 'benchmark': 'q_95'}}`.
 -   `treatment_spend_cols` *(Optional[Dict[str, str]], default=None)*: Maps
     treatment variables to their monetary spend columns. Automatically maps to
-    the treatment itself if type is `"spend"`. Example:
+    the treatment itself if type is `"spend"`. Every key must be a treatment
+    listed in `d_cols` (`ValueError` at construction otherwise). Example:
     `{'discount_rate': 'discount_cost'}`.
 -   `sales_col` *(Optional[str], default=None)*: Outcome sales column, used for
     calculating ROI and optimization. Example: `'total_sales'`.
@@ -96,8 +113,11 @@ parallelization, model selection, and visual reporting.
     together with a configured family (spend treatments only) emits a
     `UserWarning` that Phase 0's alpha estimate will be discarded by the
     simple optimizer. The value in force is
-    written to `metadata.json["simple_optimization"]` and shown in the HTML
-    header (`Simple Optimization: True/False`). Example: `False`.
+    written to `metadata.json["simple_optimization"]` (next to the user's
+    selection, `simple_optimization_requested`, the derived value,
+    `simple_optimization_derived`, and `simple_optimization_forced`) and
+    shown in the HTML header (`Simple Optimization: user selection: … | in
+    force: …`). Example: `False`.
 -   `opt_periods` *(Optional[tuple[Any, Any]], default=None)*: Tuple of start
     and end periods for optimization. If the start is after the end, or the
     window lies outside the data's date range, a `UserWarning` is emitted and
@@ -916,6 +936,157 @@ to at most `0.999` to avoid a division by zero. Useful to build the
 
 --------------------------------------------------------------------------------
 
+## Module: `doubleml_pipeline.preprocessing.price_benchmark`
+
+Benchmark price, gap and price investment of `"price"` treatments. The
+orchestrator calls these functions at the start of `run_full_pipeline`
+(`_apply_price_treatments`); they are public so that the same computations
+can be reproduced or inspected outside a run. Vocabulary and rules: [Price
+treatments](advanced.md#price-treatments-benchmark-gap-and-price-investment).
+
+**Constants:** `PRICE_TYPE = "price"` (the treatment type handled here); the
+`benchmark` keywords `AS_IS = "as_is"` and `ROLLING_MAX = "rolling_max"`;
+the `BenchmarkSpec.method` values `METHOD_AUTO`, `METHOD_AS_IS`,
+`METHOD_QUANTILE`, `METHOD_ROLLING_MAX`, `METHOD_COLUMN`, `METHOD_CONSTANT`;
+`TREATMENT_TYPE_KEYS = {"type", "benchmark", "window"}` (the keys of the dict
+form of a `treatment_types` entry); the output column suffixes `GAP_SUFFIX =
+"_gap"`, `BENCHMARK_SUFFIX = "_benchmark"` and `INVESTMENT_SUFFIX =
+"_investment"`.
+
+### Class: `BenchmarkSpec`
+
+A frozen dataclass: how the benchmark price `b_{g,t}` of a price treatment is
+set.
+
+#### `__init__(self, method, percentile=None, window=None, column=None, value=None)`
+
+-   `method` *(str)*: one of the `METHOD_*` constants.
+-   `percentile` *(Optional[int])*: the `k` of `q_k` (`METHOD_QUANTILE`).
+-   `window` *(Optional[str])*: `'<n>W'` or `'<n>D'` (`METHOD_ROLLING_MAX`).
+-   `column` *(Optional[str])*: the benchmark price column (`METHOD_COLUMN`).
+-   `value` *(Optional[float])*: the constant benchmark price
+    (`METHOD_CONSTANT`).
+
+#### `describe(self) -> str`
+
+The specification in the notation of the documentation: `'q_100'`,
+`'rolling_max(window=26W)'`, `"column 'list_price'"`, `'constant 1200'`,
+`'as_is'` or `'auto'`.
+
+#### `is_time_varying(self) -> bool`
+
+`True` when `b_{g,t}` can differ between the rows of one group
+(`rolling_max` and column benchmarks).
+
+#### `to_metadata(self) -> Dict[str, Any]`
+
+The JSON-serializable form written to `metadata.json["price_benchmarks"]`
+(`method`, `percentile`, `window`, `column`, `value`, `description`).
+
+### Function: `parse_benchmark`
+
+#### `parse_benchmark(value, window=None, where='treatment_types') -> BenchmarkSpec`
+
+Parses the `benchmark` (and `window`) entry of a price treatment: `None`
+(automatic), `'as_is'`, `'q_k'` with `1 <= k <= 100`, `'rolling_max'` (then
+`window` is required: a positive integer followed by `W` or `D`), a number
+`> 0` (constant), or any other string (a benchmark column name). `window`
+with another benchmark, an out-of-range `k`, a non-positive constant, an
+empty string or a bool raise `ValueError` / `TypeError`; `where` prefixes the
+messages.
+
+### Function: `parse_treatment_type`
+
+#### `parse_treatment_type(d_col, value) -> Tuple[str, Optional[BenchmarkSpec]]`
+
+Splits one `treatment_types` entry — the type as a string, or a dict
+`{'type': ..., 'benchmark': ..., 'window': ...}` — into the type string and,
+for `'price'`, its `BenchmarkSpec` (`METHOD_AUTO` when no benchmark is
+given; `None` for the other types). Unknown keys, a missing `'type'`, or a
+`benchmark` / `window` on a type other than `'price'` raise `ValueError`.
+
+### Function: `split_lag`
+
+#### `split_lag(column) -> Tuple[str, int]`
+
+`'<base>_l<n>'` → `(base, n)` (the naming of `create_lagged_features`);
+`(column, 0)` for any other name.
+
+### Function: `resolve_auto`
+
+#### `resolve_auto(spec, prices) -> BenchmarkSpec`
+
+Resolves `METHOD_AUTO` from the treatment column: a column whose smallest
+non-NaN value is `<= 0` is taken to be a gap already (`METHOD_AS_IS`),
+otherwise the group maximum (`METHOD_QUANTILE`, `percentile=100`). Any other
+`spec` is returned unchanged. A column without numeric values raises
+`ValueError`.
+
+### Function: `reserved_column_collisions`
+
+#### `reserved_column_collisions(df) -> List[str]`
+
+The columns of `df` named like a benchmark keyword (`as_is`, `rolling_max`,
+`q_<k>`); the orchestrator rejects such a frame because the column could not
+be named as a benchmark column.
+
+### Function: `compute_benchmark`
+
+#### `compute_benchmark(df, price_col, spec, group_cols, date_col=None) -> pd.Series`
+
+`b_{g,t}` of every row of `df` for a resolved `spec`, aligned with
+`df.index`. `group_cols` are the columns defining a group (empty for one
+group). `METHOD_QUANTILE` is the smallest observed price of the group at or
+above the percentile; `METHOD_ROLLING_MAX` the maximum price of the group over
+the calendar window `(t − W, t]` (requires `date_col`); `METHOD_COLUMN` the
+column (must exist) and `METHOD_CONSTANT` the constant. An unresolved
+`spec` raises `ValueError`.
+
+### Function: `period_delta`
+
+#### `period_delta(df, date_col, group_cols) -> pd.Timedelta`
+
+The length of one period as `create_lagged_features` infers it: the rows
+are sorted by `group_cols` then `date_col` and the median of the positive
+differences between consecutive dates is taken (1 day when none exists).
+
+### Function: `shift_within_groups`
+
+#### `shift_within_groups(df, column, n_periods, date_col, group_cols, delta, fill_value=0.0) -> pd.Series`
+
+The value of `column` in the row of the same group exactly `n_periods ×
+delta` earlier; `fill_value` where that row does not exist (a NaN of an
+existing row is kept). Used for the gap and the investment of lagged price
+treatments.
+
+### Function: `investment`
+
+#### `investment(gap, cost=None, sales=None, prices=None) -> Tuple[pd.Series, Dict[str, int]]`
+
+The price investment `C` with `C = 0` where the gap is `<= 0`. With `cost`
+(the caller's cost column) its value is kept where `D > 0`; otherwise
+`C = sales / prices × max(D, 0)` (NaN sales give `0`; a price `<= 0` or NaN
+where the gap is defined raises `ValueError`). Returns the series and the
+counts `n_rows_cost_zeroed` (caller's column: rows with `D <= 0` whose cost
+was not `0`) and `n_rows_sales_missing`.
+
+### Function: `gap_counts`
+
+#### `gap_counts(gap) -> Dict[str, int]`
+
+`{'n_rows_gap_zero', 'n_rows_gap_negative'}` of a gap column (NaN excluded).
+
+### Function: `output_names`
+
+#### `output_names(base, lag=0) -> Dict[str, str]`
+
+The output columns of the price treatment `base`: `'<base>_gap'`,
+`'<base>_benchmark'`, `'<base>_investment'`; for a lag `n > 0`,
+`'<base>_gap_l<n>'` and `'<base>_investment_l<n>'` (the `_l<n>` suffix stays
+at the end, as `create_lagged_features` names its columns).
+
+--------------------------------------------------------------------------------
+
 ## Module: `doubleml_pipeline.evaluation.runner`
 
 ### Class: `DoubleMLPipeline`
@@ -1707,8 +1878,11 @@ contours. Includes formatted CATE mathematical equations.
 the total row): the axis scales the chart was saved with.
 
 **Layout:** the grid holds one square cell per (treatment, continuous covariate)
-pair plus a trailing "total" row. The figure height is derived from the cell
-width so the cells stay square. The right-hand column (the "Binary Covariates"
+pair plus a trailing "total" row. Every cell is a 6-inch square — the same
+size in this chart and in `plot_cate_response_curves`, so the HTML report can
+show the two pngs with equal cells and fonts — and the grid width and figure
+height follow from the cell size, the spacing and the margins. The right-hand
+column (the "Binary Covariates"
 legend, the "Estimated CATE Functions" box and the "P-value & Std Err" box) is
 sized from its monospace font so that the three boxes span it edge to edge —
 no blank space is left at the right of the png — and the legend is expanded to
@@ -1932,8 +2106,8 @@ the CSV columns behind them (`summary_alpha_grid.csv`: `mean_r_loss`,
 
 The Phase 0 figures, written to `step0_saturation/`.
 They are **always** written, whatever warnings fired. Every file name carries
-the prefix of the identification diagnostic it visualizes (`diag1_` … `diag6_`) or
-`others_` when no rule is attached; the names live in
+the prefix of the identification diagnostic it visualizes (`diag1_` …
+`diag6_`) or `others_` when no rule is attached; the names live in
 `doubleml_pipeline.utils.io`. Every function takes the
 `AlphaSelectionResult` (duck-typed, so there is no import cycle) and a
 destination path, and returns the path (`plot_split_coverage` takes the
@@ -2010,14 +2184,41 @@ and `roi_output_001_time_series_charts (<t>)` … `roi_output_007_optimization
 
 **Header:** the light green box above the tabs lists the run's columns and
 model settings; its last rows are `CATE Intercept`, `Selected family`,
-`Decision` and `Simple Optimization`. `Selected family` and `Decision` are the
-Phase 0 outcome read from `metadata["saturation_phase0"]` — the saturation
-family adopted for the treatment (`None` when the 1-SE test kept it linear) and
-the decision (`saturation` / `linear`) — shown as the bare values with a single
-treatment and as `<treatment>: <value>, …` with several; without a configured
-family they read `None (no saturation family configured)` and `linear`, and a
-saturation run whose metadata lacks the Phase 0 record (older files) shows
-`n/a`.
+`Decision` and `Simple Optimization`. In `Treatment Types` a `price`
+treatment carries its benchmark — `price (benchmark: q_95)`, `price
+(benchmark: rolling_max, window: 26W)`, `price (benchmark: column '<c>')`,
+`price (benchmark: constant <v>)` or `price (benchmark: as_is, the column is
+a gap already)`, with `, automatic` appended when the benchmark was not given
+by the caller — and in `Treatment Spend Col(s)` its investment column says how
+it was built: `(not specified; computed from the benchmark: <formula>)`
+without a `treatment_spend_cols` entry, `(from treatment_spend_cols
+'<column>': <formula>)` with one (both read from
+`metadata["price_benchmarks"]`). `Selected family` is the family the user
+configured (`saturation_config["saturation"]["family"]`, i.e.
+`metadata["saturation_family"]`; `None (no saturation family configured)`
+without one). `Decision` is the Phase 0 outcome read from
+`metadata["saturation_phase0"]` — `saturation (<family adopted>)` or `linear`
+per treatment — shown as the bare value with a single treatment and as
+`<treatment>: <value>, …` with several; it reads `linear` without a configured
+family and `n/a` when a saturation run's metadata lacks the Phase 0 record
+(older files). `Simple Optimization` shows the user's selection and the final
+decision — whether the simple optimizer ran — as `user selection:
+<True|False|not set (default <True|False>: …)> | final decision:
+<True|False>`: the final decision is `True` when `simple_optimization` was in
+force (selected, derived from the saturation family, or forced — then
+` (forced: non-spend treatment)` is appended) and, otherwise, for the
+treatments whose Phase 4 fell back to the simple optimizer (` (linear
+fallback: Phase 0 selected linear for <treatments>)` is appended; with several
+treatments that disagree the decision is listed as `<treatment>:
+<True|False>, …`). Read from `metadata["simple_optimization_requested"]`,
+`["simple_optimization_derived"]`, `["simple_optimization_forced"]`,
+`["simple_optimization"]` and `["phase4_optimization"]`; metadata files
+without the user's selection show `user selection: n/a (older metadata)`.
+
+**CATE charts (`004_cate`):** the scatter matrix and the response curves are
+drawn with cells of one size, and the tab displays the two pngs at one common
+scale (the wider at the full width, the other at a proportional width), so
+their cells and fonts match on screen.
 
 **File name:** `<output_dir>/<treatment>_<outcome>[_<family>].html`. Every
 part is sanitized with `re.sub(r"[^0-9A-Za-z._-]+", "_", …).strip("._-")`,
@@ -2336,8 +2537,9 @@ point** `T_knee = alpha` (`f'(T_knee) = f'(0) / 2`), and the
 >
 > `fbar(T; alpha) = f(T; alpha) / f(T_ref; alpha)`,  `T_ref = q95(T | T > 0)`.
 >
-> Every candidate — each grid alpha, the identity candidate `fbar_T = T / T_ref`, the
-> intercept curve — passes through `(T_ref, 1)` and differs only in shape;
+> Every candidate — each grid alpha, the identity candidate
+> `fbar_T = T / T_ref`, the intercept curve — passes through `(T_ref, 1)` and
+> differs only in shape;
 > `fbar` is dimensionless (unit free in `T`), `fbar(0) = 0`, and in the
 > slow-saturation limit `fbar -> T / T_ref`. `theta` is therefore "the
 > increment of `Y` when the treatment moves from `0` to `T_ref`". Without this
@@ -3616,7 +3818,8 @@ Writes, for one dimension (`<prefix>` is `total`, `geo_<geo>` or
 `item_<item>`), the three before / after charts shared by both optimizers.
 Each is two line charts stacked vertically — **before** the optimization on top,
 **after** it below — on an **identical vertical scale**, with the optimization
-period marked by dashed vertical lines:
+period shaded in translucent light green (legend entry `Optimization Period`)
+and its edges marked by dashed vertical lines:
 
 | File | Top panel (before) | Bottom panel (after) |
 | :--- | :--- | :--- |
@@ -3659,7 +3862,8 @@ size as the incremental-effect and ROI charts. Nothing is written when
 -   `threshold_roi` *(Optional[float], default=None)*: The ROI floor,
     annotated in the title when given.
 -   `start_date` / `end_date` *(Any, default=None)*: Inclusive bounds of the
-    optimization period, marked by dashed vertical lines on both panels.
+    optimization period, shaded in light green with dashed edges on both
+    panels.
 
 ### Function: `plot_incremental_effect_before_after`
 
@@ -3866,8 +4070,11 @@ it); `budget_mode`, the scope and `mu*` describe the whole problem; `K`,
 | `<prefix>_timeseries_spend_before_after.png`, `<prefix>_timeseries_incremental_effect_before_after.png`, `<prefix>_timeseries_roi_before_after.png` | The before / after set shared with the simple optimizer, see [`plot_before_after_charts`](#function-plot_before_after_charts). The former `<prefix>_incremental_effect.png` is superseded by the incremental-effect chart of this set. |
 
 The two-line charts share the same axes (x: `Date`, y: `Amount`), use the same
-panel geometry as every other `007_optimization` chart and mark the
-optimization period boundaries with dashed vertical lines.
+panel geometry as every other `007_optimization` chart and shade the
+optimization period in translucent light green (legend entry `Optimization
+Period`) with dashed vertical lines at its boundaries — as does every chart
+of `007_optimization`, including the simple optimizer's
+`<prefix>_timeseries_spend_vs_est.png`.
 
 **Columns added to the returned frame:**
 

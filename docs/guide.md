@@ -852,7 +852,7 @@ that the estimate does not cover those weeks.
 
 | Parameter | Plain meaning | Typical value | Change when |
 | :--- | :--- | :--- | :--- |
-| `treatment_types` | per treatment: `"spend"` (default), `"percentage"`, `"impressions"` or `"price"` | `{"discount_rate": "percentage"}` | always declare non-spend treatments |
+| `treatment_types` | per treatment: `"spend"` (default), `"percentage"`, `"impressions"` or `"price"`, keyed by the column name as listed in `d_cols` (a key that is not in `d_cols` is a `ValueError`) | `{"discount_rate": "percentage"}` | always declare non-spend treatments, each lag included |
 | `treatment_spend_cols` | per non-spend treatment, the column with its monetary cost | `{"discount_rate": "discount_cost"}` | required for ROI and optimization of non-spend treatments |
 | `sales_col` | the sales column used by the amount-based ROI | `"sales_revenue"` | usually `= y_col` |
 | `optimize` | run the Phase 4 budget optimization | `False` | single treatment only |
@@ -872,12 +872,15 @@ already money-on-money; for the other types it is not:
 | `"spend"` *(default)* | incremental sales per currency unit | not needed | not generated (the Phase 4 totals already are the ROI) |
 | `"percentage"` | incremental sales per discount point | amount-based ROI = incremental sales ÷ discount cost | generated |
 | `"impressions"` | incremental sales per impression | amount-based ROI = incremental sales ÷ media cost | generated |
-| `"price"` | incremental sales per unit of price gap (`benchmark price − current price`) | amount-based ROI = incremental sales ÷ price investment | generated |
+| `"price"` | incremental sales per currency unit of the **gap** `benchmark price − price` (the pipeline builds the gap from the `benchmark` of `treatment_types`, e.g. `{"type": "price", "benchmark": "q_95"}`; the group maximum by default) | amount-based ROI = incremental sales ÷ price investment (`quantity × gap`, built automatically from `sales_col` when no cost column is given) | generated |
 
 Non-spend treatments without the two mappings run, but skip the ROI output
 and the optimization with a warning. A `percentage` treatment must hold values
 in `[0, 1]`; `create_amount_from_pct` builds a cost column from a rate when
-you do not have one. Details:
+you do not have one. A `price` treatment is estimated as the gap from a
+benchmark price and gets its investment column built for it; see
+[Price treatments](advanced.md#price-treatments-benchmark-gap-and-price-investment).
+Details:
 [Treatment types and ROI charts](advanced.md#treatment-types-and-roi-charts).
 
 ### The two optimizers

@@ -365,14 +365,17 @@ def apply_saturation(
     * ``log``   : ``log(1 + T / alpha)``
     * ``power`` : ``T ** alpha``
 
+  Every family is defined on ``T >= 0``; a negative ``T`` (a ``price``
+  treatment whose price is above its benchmark) is evaluated by the odd
+  extension ``f(T) = -f(-T)``, so ``f`` is continuous at 0 and increasing.
+
   Estimation, comparison and optimization all use the normalized
   :func:`normalized_saturation` (``fbar = f / f(T_ref; alpha)``); this
   function is the building block (numerator and denominator of ``fbar``) and
   the only place the family formulas live.
 
   Args:
-    t_values: Treatment values (negative values are clipped to 0, since all
-      families are defined on ``T >= 0``).
+    t_values: Treatment values (any sign; see above).
     family: One of ``SUPPORTED_FAMILIES``.
     alpha: The saturation parameter: a scalar, or an array broadcastable to
       ``t_values`` (treatment normalization bridge).
@@ -380,16 +383,18 @@ def apply_saturation(
   Returns:
     ``f(T; alpha)`` broadcast over ``t_values`` and ``alpha``.
   """
-  t_arr = np.maximum(np.asarray(t_values, dtype=float), 0.0)
+  t_arr = np.asarray(t_values, dtype=float)
+  sign = np.sign(t_arr)
+  magnitude = np.abs(t_arr)
   alpha = clip_alpha(family, alpha)
   if family == "tanh":
-    return np.tanh(0.5 * alpha * t_arr)
+    return sign * np.tanh(0.5 * alpha * magnitude)
   if family == "exp":
-    return 1.0 - np.exp(-alpha * t_arr)
+    return sign * (1.0 - np.exp(-alpha * magnitude))
   if family == "log":
-    return np.log1p(t_arr / alpha)
+    return sign * np.log1p(magnitude / alpha)
   if family == "power":
-    return np.power(t_arr, alpha)
+    return sign * np.power(magnitude, alpha)
   raise ValueError(f"Unsupported saturation family '{family}'.")
 
 
@@ -402,7 +407,8 @@ def reference_point(
   computed ONCE on the full data before the top-level split -- no
   leakage, since ``Y`` is not used.  The quantile is taken over the strictly
   positive treatment values so that the mass at zero of sporadic spend does
-  not pull the reference point towards 0.
+  not pull the reference point towards 0.  A signed treatment (negative
+  values, evaluated by the odd extension of ``f``) contributes ``|T|``.
 
   Args:
     t_values: Treatment values on the scale Phase 0 works on (``T / c``).
@@ -420,7 +426,7 @@ def reference_point(
     raise ValueError(
         f"saturation.t_ref_quantile must lie in (0, 1] (got {quantile})."
     )
-  t_arr = np.asarray(t_values, dtype=float).reshape(-1)
+  t_arr = np.abs(np.asarray(t_values, dtype=float).reshape(-1))
   t_pos = t_arr[np.isfinite(t_arr) & (t_arr > 0.0)]
   if t_pos.size == 0:
     raise ValueError(
@@ -441,7 +447,8 @@ def basis_domain_max(
   Observations above ``T_max`` are clipped to ``T_max`` when the basis is
   evaluated (:meth:`TreatmentBasis.transform`), so a single extreme day no
   longer stretches the last spline piece over a huge range.  When no
-  strictly positive value exists the (finite) maximum is returned.
+  strictly positive value exists the (finite) maximum is returned.  A signed
+  treatment contributes ``|T|``.
 
   Args:
     t_values: Treatment values on the scale Phase 0 works on (``T / c``).
@@ -457,7 +464,7 @@ def basis_domain_max(
   q = float(quantile)
   if not (0.0 < q <= 1.0):
     raise ValueError(f"The T_max quantile must lie in (0, 1] (got {quantile}).")
-  t_arr = np.asarray(t_values, dtype=float).reshape(-1)
+  t_arr = np.abs(np.asarray(t_values, dtype=float).reshape(-1))
   t_arr = t_arr[np.isfinite(t_arr)]
   if t_arr.size == 0:
     raise ValueError("T_max needs at least one finite treatment value.")
@@ -486,7 +493,8 @@ def normalized_saturation(
   increment of ``Y`` when the treatment moves from ``0`` to ``T_ref``".
 
   Args:
-    t_values: Treatment values (negative values are clipped to 0).
+    t_values: Treatment values (a negative value is evaluated by the odd
+      extension ``fbar(T) = -fbar(-T)``, see :func:`apply_saturation`).
     family: One of ``SUPPORTED_FAMILIES``.
     alpha: The saturation parameter: a scalar, or an array broadcastable to
       ``t_values`` (treatment normalization bridge).
@@ -534,6 +542,9 @@ def saturation_derivative(
 ) -> np.ndarray:
   """Evaluates ``f_T(T; alpha)`` (the marginal effect multiplier).
 
+  The odd extension of :func:`apply_saturation` makes the derivative even:
+  ``f_T(T) = f_T(|T|)``.
+
   Args:
     t_values: Treatment values.
     family: One of ``SUPPORTED_FAMILIES``.
@@ -543,7 +554,7 @@ def saturation_derivative(
   Returns:
     ``d f(T; alpha) / dT`` broadcast over ``t_values`` and ``alpha``.
   """
-  t_arr = np.maximum(np.asarray(t_values, dtype=float), 0.0)
+  t_arr = np.abs(np.asarray(t_values, dtype=float))
   alpha = clip_alpha(family, alpha)
   if family == "tanh":
     # f'(T) = (lambda / 2) * (1 - f(T)^2).
@@ -700,7 +711,10 @@ class TreatmentBasis:
   ``J - 4`` interior knots sit at equally spaced quantiles of ``T > 0`` in
   ``D_sel`` (quantiles including ``T = 0`` are not used, to avoid piling knots
   onto the mass at zero).  Observations above ``T_max`` are clipped to
-  ``T_max`` by :meth:`transform` (``n_above_t_max`` counts them).  The basis
+  ``T_max`` by :meth:`transform` (``n_above_t_max`` counts them), and a
+  negative ``T`` is evaluated as ``-b_j(|T|)`` -- the odd extension that
+  mirrors ``f(T) = -f(-T)`` of :func:`apply_saturation`, so that ``c(alpha)``
+  approximates ``fbar`` on both sides of 0.  The basis
   is used only in Stage B; Phases 1-3 evaluate ``fbar(T; alpha_hat)``
   directly, so ``T > T_max`` in ``D_inf`` causes no extrapolation.
 
@@ -764,10 +778,13 @@ class TreatmentBasis:
       raise ValueError("Cannot build a treatment basis from an empty array.")
     self.degree = int(degree)
     order = self.degree + 1
-    # The domain is [0, T_max]; T >= 0 for every family (negative values
-    # are clipped to 0 by `apply_saturation`).
+    # The domain is [0, T_max].  A negative T (a `price` treatment above its
+    # benchmark) is evaluated by the odd extension, b_j(T) = -b_j(|T|), the
+    # counterpart of `apply_saturation`'s f(T) = -f(-T); knots, grid and
+    # support are therefore placed on |T|.
     self.t_min = 0.0
-    positive = t_arr[t_arr > 0.0]
+    magnitude = np.abs(t_arr)
+    positive = magnitude[magnitude > 0.0]
     if t_max is None:
       t_max = basis_domain_max(t_arr)
     self.t_max = float(t_max)
@@ -777,7 +794,7 @@ class TreatmentBasis:
       # R-loss cannot discriminate, which the diagnostics report.
       self.t_max = self.t_min + 1.0
     # Rows of `t_values` that `transform` clips to T_max (reported by Diag1).
-    self.n_above_t_max = int(np.count_nonzero(t_arr > self.t_max))
+    self.n_above_t_max = int(np.count_nonzero(magnitude > self.t_max))
     # T_ref (the normalization is always on).
     if t_ref is None:
       t_ref = (
@@ -838,10 +855,10 @@ class TreatmentBasis:
     self.basis_cond = float(s_max / s_min) if s_min > 0.0 else float("inf")
     self.ill_conditioned = bool(self.basis_cond >= MAX_BASIS_CONDITION)
     self.projector = np.linalg.pinv(self.b_grid, rcond=_BASIS_PINV_RCOND)
-    # eps(J) is measured over the observed T_i of D_sel (quantile-compressed
+    # eps(J) is measured over the observed |T_i| of D_sel (quantile-compressed
     # for very large samples; repeated values keep their empirical mass).
     # Used ONLY for eps(J), never for c(alpha).
-    support = np.sort(np.clip(t_arr, self.t_min, self.t_max))
+    support = np.sort(np.clip(magnitude, self.t_min, self.t_max))
     if support.size > 20000:
       support = np.quantile(support, np.linspace(0.0, 1.0, num=20000))
     self._t_support = support
@@ -851,17 +868,18 @@ class TreatmentBasis:
     """Evaluates the basis at arbitrary treatment values.
 
     Args:
-      t_values: Treatment values (clipped to the domain ``[0, T_max]`` to avoid
-        spline extrapolation).
+      t_values: Treatment values.  ``|T|`` is clipped to the domain ``[0,
+        T_max]`` to avoid spline extrapolation; a negative ``T`` gives
+        ``-b_j(|T|)`` (the odd extension, see :func:`apply_saturation`).
 
     Returns:
       An ``(n, J)`` design matrix.
     """
-    t_arr = np.clip(
-        np.asarray(t_values, dtype=float).reshape(-1), self.t_min, self.t_max
-    )
-    mat = np.asarray(self._spline(t_arr), dtype=float)
-    return mat.reshape(t_arr.size, self.n_basis)
+    t_arr = np.asarray(t_values, dtype=float).reshape(-1)
+    sign = np.where(t_arr < 0.0, -1.0, 1.0)
+    magnitude = np.clip(np.abs(t_arr), self.t_min, self.t_max)
+    mat = np.asarray(self._spline(magnitude), dtype=float)
+    return mat.reshape(t_arr.size, self.n_basis) * sign[:, None]
 
   def greville_abscissae(self) -> np.ndarray:
     """Returns the Greville abscissae ``xi_j``.

@@ -389,6 +389,7 @@ def optimize(
           alpha=0.3,
           label="Reduced Spend",
       )
+      _mark_period(ax, start_date, end_date)
 
       _style_timeseries_panel(
           ax,
@@ -646,9 +647,35 @@ def _style_date_axis(ax) -> None:
   plt.setp(ax.get_xticklabels(), rotation=90, fontsize=12)
 
 
+# The optimization period on every 007_optimization chart: a translucent
+# light-green band between its start and end dates (legend entry
+# "Optimization Period") with dashed grey edges.
+_PERIOD_FILL = "lightgreen"
+_PERIOD_FILL_ALPHA = 0.25
+_PERIOD_LABEL = "Optimization Period"
+
+
 def _mark_period(ax, start_date: Any, end_date: Any) -> None:
-  """Dashed markers at the start and end of the optimization period."""
+  """Shades the optimization period and marks its start and end.
+
+  A translucent light-green band (``_PERIOD_LABEL`` in the legend) spans the
+  period behind every other artist; dashed grey lines mark its edges.
+  Nothing is drawn when either date is ``None``.
+
+  Args:
+    ax: The axes of a date-indexed panel.
+    start_date: Inclusive start of the optimization period.
+    end_date: Inclusive end of the optimization period.
+  """
   if start_date is not None and end_date is not None:
+    ax.axvspan(
+        start_date,
+        end_date,
+        color=_PERIOD_FILL,
+        alpha=_PERIOD_FILL_ALPHA,
+        zorder=0,
+        label=_PERIOD_LABEL,
+    )
     ax.axvline(start_date, color="grey", linestyle="--", alpha=0.6)
     ax.axvline(end_date, color="grey", linestyle="--", alpha=0.6)
 
@@ -717,8 +744,8 @@ def _plot_before_after_panels(
     colors: ``(top line colour, bottom line colour)``.
     fills: ``(top fill colour, bottom fill colour)`` under the lines.
     y_label: Y-axis label of both panels.
-    start_date: Optional inclusive start of the optimization period (dashed
-      marker on both panels).
+    start_date: Optional inclusive start of the optimization period (shaded
+      band with dashed edges on both panels, see :func:`_mark_period`).
     end_date: Optional inclusive end of the optimization period.
     reference: Optional ``(value, label)`` horizontal reference line drawn on
       both panels (e.g. the ROI threshold).
@@ -1902,8 +1929,9 @@ def _timeseries_line_chart(
     series: ``(values, color, label)`` triples, drawn in order.
     out_path: Destination png path.
     title: Chart title.
-    start_date: Inclusive start of the optimization period (dashed marker).
-    end_date: Inclusive end of the optimization period (dashed marker).
+    start_date: Inclusive start of the optimization period (shaded band with
+      dashed edges, see :func:`_mark_period`).
+    end_date: Inclusive end of the optimization period.
   """
   fig, (ax,) = _timeseries_figure(1)
   for values, color, label in series:

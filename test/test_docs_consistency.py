@@ -109,6 +109,7 @@ _DOCUMENTED_MODULES = (
     "doubleml_pipeline.optimization",
     "doubleml_pipeline.preprocessing.scalers",
     "doubleml_pipeline.preprocessing.features",
+    "doubleml_pipeline.preprocessing.price_benchmark",
     "doubleml_pipeline.evaluation.runner",
     "doubleml_pipeline.evaluation.hparam_search",
     "doubleml_pipeline.evaluation.selection",
