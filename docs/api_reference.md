@@ -1704,8 +1704,7 @@ contours. Includes formatted CATE mathematical equations.
     "stderr"}}` for the "P-value & Std Err" box.
 
 **Returns:** `{(row, col): (xlim, ylim)}` of every cell (row `len(d_cols)` is
-the total row), consumed by `plot_cate_response_curves` so both charts share
-the same axis scales.
+the total row): the axis scales the chart was saved with.
 
 **Layout:** the grid holds one square cell per (treatment, continuous covariate)
 pair plus a trailing "total" row. The figure height is derived from the cell
@@ -1734,20 +1733,33 @@ x and colorbar labels, three for y labels) is its font reduced, never below
 
 ### Function: `plot_cate_response_curves`
 
-#### `plot_cate_response_curves(df_1a_consolidated, d_cols, cont_cols, bin_cols, eq_str_dict, out_path, cate_stats_dict=None, response_specs=None, axis_limits=None) -> Dict[str, Dict[str, float]]`
+#### `plot_cate_response_curves(df_1a_consolidated, d_cols, bin_cols, out_path, response_specs=None) -> Dict[str, Dict[str, float]]`
 
 The companion of `plot_cate_scatter_matrix`, written by the orchestrator as
 `step4_consolidated_results/graph/004_cate/cate_response_curves.png` and shown
-under the scatter matrix in the `004_cate` tab of the HTML report. Same
-figure, cells, fonts, right-hand column and — through `axis_limits` — the same
-axis scales, but instead of the dots every cell shows, per binary-covariate
-combination (same colour as its dots, translucent, no dots), the response curve
-`T -> incremental KPI` in the **original** treatment units: under a saturation
-family the curve `theta_g * fbar(T / c_g; alpha_hat, T_ref)` of the group,
-otherwise the straight line `theta_g * T`. `theta_g` is the least-squares slope
-through the origin of the group's incremental KPI on its per-row transformed
-treatment (`KPI_i = theta_i * f_i` under the PLR) and `c_g` the group's median
-treatment divisor (the treatment normalization bridge).
+under the scatter matrix in the `004_cate` tab of the HTML report. **Layout:**
+a single row of `len(d_cols) + 1` square cells — one per treatment, titled
+with the treatment name, plus a trailing `Total` cell — with the same cell
+size, fonts, label wrapping and axis labels as the scatter matrix. There is no
+column per continuous covariate (the curves do not depend on them) and no
+right-hand text column: the `Binary Covariates` legend sits centred under the
+row (wrapped into as many columns as fit the row's width), and the CATE
+equations with their statistics are not repeated (they are in the scatter
+matrix right above). Instead of the dots every cell shows, per
+binary-covariate combination (same colour as its dots, translucent, no dots),
+the response curve `T -> incremental KPI` in the **original** treatment units:
+under a saturation family the curve `theta_g * fbar(T / c_g; alpha_hat, T_ref)`
+of the group, otherwise the straight line `theta_g * T`. `theta_g` is the
+least-squares slope through the origin of the group's incremental KPI on its
+per-row transformed treatment (`KPI_i = theta_i * f_i` under the PLR) and
+`c_g` the group's median treatment divisor (the treatment normalization
+bridge).
+
+**Scale:** every curve covers its own observed treatment range `[0, max T]`,
+and all cells share **one axis scale from the origin** — the same x and y
+limits, reaching the largest treatment (normally the total) and the highest
+curve or band with 5 % headroom (a negative response extends the y axis below
+zero) — so the treatments and the total are comparable at a glance.
 
 Every curve is wrapped in its **95% prediction interval** (a lighter fill of the
 group's colour, legend entry "95% prediction interval (rows of the group)"):
@@ -1757,23 +1769,27 @@ every row responds as `theta_i * fbar(T / c_g)` with its own CATE
 group `theta_i` varies only through the continuous CATE covariates, so the band
 is the spread of the response the continuous covariates induce — 95% of the
 group's rows respond inside it. Groups with fewer than two rows carrying a
-slope get no band. The trailing "total" row reuses the treatment's curve with
-a single treatment and falls back to a per-group straight-line fit otherwise;
-every cell states the response used in a small note in its **upper-right
-corner** (`response: tanh saturation (alpha_hat = ..., T_ref = ... on T/c)`,
+slope get no band. The `Total` cell reuses the treatment's curve with a single
+treatment and falls back to a per-group straight-line fit otherwise; every
+cell states the response used in a small note in its **lower-right corner**
+(`response: tanh saturation (alpha_hat = ..., T_ref = ... on T/c)`,
 `response: linear`, or `response: linear fit (sum of treatments)` in the
-total row of a multi-treatment run), away from the origin where the curves
-start.
+`Total` cell of a multi-treatment run) — the area the curves rising from the
+origin leave clear.
 
-**Parameters:** as `plot_cate_scatter_matrix`, plus
+**Parameters:**
 
+-   `df_1a_consolidated` *(pd.DataFrame)*: Consolidated results DataFrame.
+-   `d_cols` *(List[str])*: List of treatment variable column names (one cell
+    each).
+-   `bin_cols` *(List[str])*: Binary CATE covariates (one curve colour per
+    combination, as in the scatter matrix).
+-   `out_path` *(str)*: Path to save the generated plot image.
 -   `response_specs` *(Optional[dict])*: `{treatment: {"f_row": per-row
     `fbar(T_i / c_i)`, "divisor_row": per-row `c_i`, "curve_fn": callable
     mapping the normalized treatment `T / c` to `fbar`, "label": str}}` for the
     treatments under a saturation family (the orchestrator builds it from
     Phase 0: `_cate_response_specs`); treatments missing from it are linear.
--   `axis_limits` *(Optional[dict])*: the mapping returned by
-    `plot_cate_scatter_matrix`, applied verbatim.
 
 **Returns:** `{treatment: {group label: theta_g}}` of the fitted group slopes.
 
@@ -1991,6 +2007,17 @@ non-empty), `001_total`, `002_geo`, `003_item`, `004_cate`, `005_prior`,
 `006_sensitivity`, `007_optimization` (when some treatment type is `spend`),
 and `roi_output_001_time_series_charts (<t>)` … `roi_output_007_optimization
 (<t>)` per non-`spend` treatment.
+
+**Header:** the light green box above the tabs lists the run's columns and
+model settings; its last rows are `CATE Intercept`, `Selected family`,
+`Decision` and `Simple Optimization`. `Selected family` and `Decision` are the
+Phase 0 outcome read from `metadata["saturation_phase0"]` — the saturation
+family adopted for the treatment (`None` when the 1-SE test kept it linear) and
+the decision (`saturation` / `linear`) — shown as the bare values with a single
+treatment and as `<treatment>: <value>, …` with several; without a configured
+family they read `None (no saturation family configured)` and `linear`, and a
+saturation run whose metadata lacks the Phase 0 record (older files) shows
+`n/a`.
 
 **File name:** `<output_dir>/<treatment>_<outcome>[_<family>].html`. Every
 part is sanitized with `re.sub(r"[^0-9A-Za-z._-]+", "_", …).strip("._-")`,

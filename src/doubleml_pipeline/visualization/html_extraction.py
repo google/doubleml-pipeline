@@ -740,6 +740,31 @@ def generate_html_report(output_dir: str) -> str | None:
       )
   )
 
+  # Reported in the header: the Phase 0 outcome per treatment --
+  # `selected_family` (the saturation family adopted for the treatment; None
+  # when the 1-SE test kept it linear) and `decision` ("saturation" /
+  # "linear").  Without a configured family there is no Phase 0 and the
+  # treatment enters the PLR linearly.
+  def per_treatment_str(values):
+    """Renders ``{treatment: value}``; the bare value with one treatment."""
+    if not values:
+      return "n/a"
+    if len(values) == 1:
+      return str(next(iter(values.values())))
+    return ", ".join(f"{t}: {v}" for t, v in values.items())
+
+  if saturation_family:
+    selected_family_str = per_treatment_str({
+        t: (info or {}).get("selected_family")
+        for t, info in saturation_phase0.items()
+    })
+    decision_str = per_treatment_str({
+        t: (info or {}).get("decision") for t, info in saturation_phase0.items()
+    })
+  else:
+    selected_family_str = "None (no saturation family configured)"
+    decision_str = "linear"
+
   # 000_saturation tab (saturation runs only).
   phase0_button = ""
   if saturation_phase0:
@@ -831,6 +856,8 @@ def generate_html_report(output_dir: str) -> str | None:
             <strong>CATE DF:</strong> {', '.join(map(str, cate_df))} <br>
             <strong>CATE Degree:</strong> {', '.join(map(str, cate_degree))} <br>
             <strong>CATE Intercept:</strong> {', '.join(map(str, cate_intercept))} <br>
+            <strong>Selected family:</strong> {selected_family_str} <br>
+            <strong>Decision:</strong> {decision_str} <br>
             <strong>Simple Optimization:</strong> {simple_optimization_str}
         </div>
     </div>

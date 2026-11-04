@@ -19,8 +19,11 @@
   colour scheme) and the value formatting of the stats table.
 * The CATE scatter matrix and the CATE response curves: square cells, large
   fonts, wrapped long names that stay inside the figure, the aligned right
-  column and the 95 % prediction band.
-* The report file name of ``html_extraction``.
+  column of the scatter matrix, the single-row layout of the response curves
+  (one cell per treatment plus the total, legend under the row) and the 95 %
+  prediction band.
+* The report file name of ``html_extraction`` and the Phase 0 rows of its
+  header (``Selected family`` / ``Decision``).
 
 ``plot_sensitivity_contour`` is covered with the sensitivity analysis in
 test_sensitivity.py.
@@ -28,6 +31,7 @@ test_sensitivity.py.
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -153,11 +157,11 @@ class PlotsTest(unittest.TestCase):
     # `Cell.get_text()` hands back a Text artist, not the string itself.  The
     # full-width cell holds two side-by-side tables.
     self.assertEqual(len(stats_ax.tables), 2)
-    rendered = {
-        cell.get_text().get_text()
-        for table in stats_ax.tables
-        for cell in table.get_celld().values()
-    }
+    rendered = set()
+    for table in stats_ax.tables:
+      rendered.update(
+          cell.get_text().get_text() for cell in table.get_celld().values()
+      )
     self.assertIn("alpha_hat", rendered)
     self.assertIn("0.5", rendered)
     # Booleans render as yes/no and non-finite values as n/a.
@@ -190,6 +194,7 @@ class PlotsTest(unittest.TestCase):
     self.assertEqual(plots._format_stat_value("rf"), "rf")
 
   def test_wrap_axis_label_breaks_on_underscores(self):
+    """Labels break after underscores / spaces; unbreakable tokens are cut."""
     # pylint: disable=protected-access
     self.assertEqual(
         plots._wrap_axis_label("Inc. Effect: estimated_incremental_KPI_tv"),
@@ -298,6 +303,39 @@ class PlotsTest(unittest.TestCase):
         box = leg.get_window_extent(renderer=renderer)
         self.assertLessEqual(box.x1, fig_box.x1 + tol)
         self.assertGreaterEqual(box.x0, fig_box.x0 - tol)
+    for leg in fig.legends:
+      box = leg.get_window_extent(renderer=renderer)
+      self.assertLessEqual(box.x1, fig_box.x1 + tol)
+      self.assertGreaterEqual(box.x0, fig_box.x0 - tol)
+      self.assertGreaterEqual(box.y0, fig_box.y0 - tol)
+      self.assertLessEqual(box.y1, fig_box.y1 + tol)
+
+  def _assert_single_row_with_legend_below(self, fig, n_cells):
+    """The response chart: ``n_cells`` square cells in one row, legend under.
+
+    Args:
+      fig: The response-curve figure.
+      n_cells: Expected number of cells (treatments + 1).
+
+    Returns:
+      The cells, left to right.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    cells = [ax for ax in fig.axes if ax.get_box_aspect() == 1]
+    self.assertEqual(len(cells), n_cells)
+    # No right-hand text column: the cells are the only axes.
+    self.assertEqual(len(fig.axes), n_cells)
+    x_lefts = [ax.get_position().x0 for ax in cells]
+    self.assertEqual(x_lefts, sorted(x_lefts))
+    self.assertEqual(len({round(ax.get_position().y0, 6) for ax in cells}), 1)
+    # The figure legend lies entirely below every cell's x label.
+    self.assertEqual(len(fig.legends), 1)
+    leg_box = fig.legends[0].get_window_extent(renderer=renderer)
+    for ax in cells:
+      label_box = ax.xaxis.label.get_window_extent(renderer=renderer)
+      self.assertLess(leg_box.y1, label_box.y0)
+    return cells
 
   @mock.patch("matplotlib.pyplot.close")
   @mock.patch("matplotlib.pyplot.savefig")
@@ -326,6 +364,9 @@ class PlotsTest(unittest.TestCase):
     self._assert_texts_inside_figure(scatter_fig)
     cells = [ax for ax in scatter_fig.axes if ax.get_box_aspect() == 1]
     self.assertEqual(len(cells), 3)
+    # The returned scales are those of the cells.
+    self.assertEqual(set(limits), {(0, 0), (1, 0), (2, 0)})
+    self.assertEqual(limits[(0, 0)], (cells[0].get_xlim(), cells[0].get_ylim()))
     # Titles and x labels are wrapped (several lines) rather than cut, and
     # never drop below the readable floor.
     # pylint: disable=protected-access
@@ -337,7 +378,9 @@ class PlotsTest(unittest.TestCase):
     self.assertGreaterEqual(title.get_fontsize(), plots._CATE_MIN_CELL_FS)
     x_label = cells[0].xaxis.label
     self.assertIn("\n", x_label.get_text())
-    self.assertEqual(self._unwrap(x_label.get_text()), f"Treatment: {d_cols[0]}")
+    self.assertEqual(
+        self._unwrap(x_label.get_text()), f"Treatment: {d_cols[0]}"
+    )
     self.assertGreaterEqual(x_label.get_fontsize(), plots._CATE_MIN_CELL_FS)
     # The colorbar label of the long covariate is wrapped too.
     cbar_labels = [
@@ -357,29 +400,32 @@ class PlotsTest(unittest.TestCase):
     self.assertNotIn("123456789.123", stats_text)
     for line in stats_text.split("\n"):
       self.assertLessEqual(len(line), plots._CATE_MAX_CHARS)
-    # pylint: enable=protected-access
 
-    plots.plot_cate_response_curves(
-        frame,
-        d_cols,
-        cont_cols,
-        bin_cols,
-        eq,
-        "unused.png",
-        stats,
-        axis_limits=limits,
-    )
+    plots.plot_cate_response_curves(frame, d_cols, bin_cols, "unused.png")
     fig = plt.gcf()
     self._assert_texts_inside_figure(fig)
-    cells = [ax for ax in fig.axes if ax.get_box_aspect() == 1]
-    self.assertEqual(len(cells), 3)
-    # The response note sits in the upper-right corner of every cell.
+    # One cell per treatment plus the total, side by side.
+    cells = self._assert_single_row_with_legend_below(fig, 3)
+    # The long treatment name is wrapped in the cell title as well (and the
+    # x label, as in the scatter matrix).
+    title = cells[0].title
+    self.assertIn("\n", title.get_text())
+    self.assertEqual(self._unwrap(title.get_text()), d_cols[0])
+    self.assertGreaterEqual(title.get_fontsize(), plots._CATE_MIN_CELL_FS)
+    self.assertEqual(
+        self._unwrap(cells[0].xaxis.label.get_text()),
+        f"Treatment: {d_cols[0]}",
+    )
+    self.assertEqual(cells[-1].get_title(), "Total")
+    # pylint: enable=protected-access
+    # The response note sits in the lower-right corner of every cell, the
+    # area the curves rising from the origin leave clear.
     for ax in cells:
       notes = [t for t in ax.texts if t.get_text().startswith("response:")]
       self.assertEqual(len(notes), 1)
-      self.assertEqual(notes[0].get_position(), (0.98, 0.97))
+      self.assertEqual(notes[0].get_position(), (0.98, 0.03))
       self.assertEqual(notes[0].get_ha(), "right")
-      self.assertEqual(notes[0].get_va(), "top")
+      self.assertEqual(notes[0].get_va(), "bottom")
 
   def _scatter_frame(self):
     """Builds a small synthetic frame for the CATE scatter-matrix tests.
@@ -507,21 +553,13 @@ class PlotsTest(unittest.TestCase):
 
   @mock.patch("matplotlib.pyplot.close")
   @mock.patch("matplotlib.pyplot.savefig")
-  def test_cate_response_curves_mirror_the_scatter_matrix(
+  def test_cate_response_curves_one_cell_per_treatment_in_a_row(
       self, mock_savefig, mock_close
   ):
-    """Same cells / limits as the scatter matrix; lines, no dots; theta fit."""
+    """1 x (treatments + 1) cells on one scale from the origin; lines, no dots."""
     del mock_savefig, mock_close
     d_cols = ["tv_spend", "digital_spend"]
     frame = self._scatter_frame()
-    eq = {d: f"CATE_{d} = 1.0" for d in d_cols}
-    limits = plots.plot_cate_scatter_matrix(
-        frame, d_cols, ["price"], ["holiday"], eq, "unused.png"
-    )
-    scatter_fig = plt.gcf()
-    scatter_cells = [ax for ax in scatter_fig.axes if ax.get_box_aspect() == 1]
-    scatter_pos = [ax.get_position().bounds for ax in scatter_cells]
-    self.assertEqual(set(limits), {(0, 0), (1, 0), (2, 0)})
 
     # tv_spend follows a tanh saturation; digital_spend stays linear.
     alpha, t_ref = 0.02, 150.0
@@ -536,23 +574,24 @@ class PlotsTest(unittest.TestCase):
         }
     }
     fitted = plots.plot_cate_response_curves(
-        frame,
-        d_cols,
-        ["price"],
-        ["holiday"],
-        eq,
-        "unused.png",
-        response_specs=specs,
-        axis_limits=limits,
+        frame, d_cols, ["holiday"], "unused.png", response_specs=specs
     )
     fig = plt.gcf()
-    cells = [ax for ax in fig.axes if ax.get_box_aspect() == 1]
-    self.assertEqual(len(cells), len(scatter_cells))
-    for ax, pos, key in zip(cells, scatter_pos, [(0, 0), (1, 0), (2, 0)]):
-      # Identical geometry and axis scales.
-      np.testing.assert_allclose(ax.get_position().bounds, pos)
-      self.assertEqual(ax.get_xlim(), limits[key][0])
-      self.assertEqual(ax.get_ylim(), limits[key][1])
+    # One cell per treatment plus the total, side by side in a single row
+    # (no column per continuous covariate: the curves do not depend on them).
+    cells = self._assert_single_row_with_legend_below(fig, len(d_cols) + 1)
+    self.assertEqual(
+        [ax.get_title() for ax in cells], ["tv_spend", "digital_spend", "Total"]
+    )
+    self.assertEqual(
+        [ax.get_xlabel() for ax in cells],
+        [
+            "Treatment: tv_spend",
+            "Treatment: digital_spend",
+            "Total Treatment (Excl. Lags)",
+        ],
+    )
+    for ax in cells:
       # One translucent line per binary group, no scatter; the only
       # collections are the translucent 95% prediction bands, one per group,
       # drawn beneath the lines.
@@ -564,6 +603,30 @@ class PlotsTest(unittest.TestCase):
         self.assertIsInstance(band, matplotlib.collections.PolyCollection)
         self.assertLess(band.get_alpha(), 0.5)
         self.assertLess(band.get_zorder(), ax.get_lines()[0].get_zorder())
+    # One scale from the origin for every cell: identical limits starting at
+    # zero, wide enough for the largest treatment (the total) and the highest
+    # curve or band drawn anywhere.
+    self.assertEqual(len({ax.get_xlim() for ax in cells}), 1)
+    self.assertEqual(len({ax.get_ylim() for ax in cells}), 1)
+    (x0, x1), (y0, y1) = cells[0].get_xlim(), cells[0].get_ylim()
+    self.assertEqual((x0, y0), (0.0, 0.0))
+    inputs = [frame[d].to_numpy() for d in d_cols]
+    inputs.append(frame[d_cols].sum(axis=1).to_numpy())
+    self.assertGreater(x1, max(x.max() for x in inputs))
+    y_drawn = max(
+        max(ln.get_ydata().max() for ln in ax.get_lines()) for ax in cells
+    )
+    bands = []
+    for ax in cells:
+      bands.extend(ax.collections)
+    band_top = max(band.get_paths()[0].vertices[:, 1].max() for band in bands)
+    self.assertGreater(y1, max(y_drawn, band_top))
+    self.assertLess(y1, 1.2 * max(y_drawn, band_top))
+    # Every curve covers its own observed treatment range, from zero.
+    for ax, x_data in zip(cells, inputs):
+      for line in ax.get_lines():
+        self.assertEqual(line.get_xdata().min(), 0.0)
+        self.assertAlmostEqual(line.get_xdata().max(), x_data.max())
     # Group colours match the dots of the scatter matrix: both charts assign
     # tab10 colours in the order the binary patterns first appear.
     cmap = plt.get_cmap("tab10")
@@ -577,15 +640,73 @@ class PlotsTest(unittest.TestCase):
       self.assertAlmostEqual(theta, 1.5, places=6)
     for theta in fitted["tv_spend"].values():
       self.assertGreater(theta, 0.0)
-    # The right column carries the same three boxes; the legend additionally
-    # explains the band.
-    ax_right = fig.axes[-1]
-    legend = ax_right.get_legend()
-    self.assertIsNotNone(legend)
+    # The legend under the row names every group (same labels and
+    # first-appearance order as the scatter matrix) and explains the band; the
+    # equations / stats boxes of the scatter matrix are not repeated.
+    legend = fig.legends[0]
     legend_texts = [t.get_text().strip() for t in legend.get_texts()]
-    self.assertIn("95% prediction interval (rows of the group)", legend_texts)
-    self.assertEqual(len(ax_right.texts), 2)
+    groups = [f"holiday={v}" for v in frame["holiday"].drop_duplicates()]
+    self.assertEqual(
+        legend_texts,
+        groups + ["95% prediction interval (rows of the group)"],
+    )
+    self.assertEqual(legend.get_title().get_text(), "Binary Covariates")
+    self.assertEqual(sum(len(ax.texts) for ax in fig.axes), len(cells))
     self.assertIn("Response Curves", fig._suptitle.get_text())  # pylint: disable=protected-access
+
+  @mock.patch("matplotlib.pyplot.close")
+  @mock.patch("matplotlib.pyplot.savefig")
+  def test_cate_response_curves_legend_wraps_to_the_row_width(
+      self, mock_savefig, mock_close
+  ):
+    """Many binary groups: the legend wraps into several rows under the cells."""
+    del mock_savefig, mock_close
+    rng = np.random.default_rng(3)
+    frame = self._scatter_frame()
+    frame["promo_flag"] = rng.integers(0, 2, len(frame))
+    bin_cols = ["holiday", "promo_flag"]
+    d_cols = ["tv_spend", "digital_spend"]
+    plots.plot_cate_response_curves(frame, d_cols, bin_cols, "unused.png")
+    fig = plt.gcf()
+    self._assert_texts_inside_figure(fig)
+    cells = self._assert_single_row_with_legend_below(fig, len(d_cols) + 1)
+    legend = fig.legends[0]
+    n_groups = len(frame[bin_cols].drop_duplicates())
+    self.assertEqual(n_groups, 4)
+    self.assertEqual(len(legend.get_texts()), n_groups + 1)
+    # Every cell (each treatment and the total) carries one response curve
+    # and one 95% band per binary-covariate combination, coloured like the
+    # dots of the scatter matrix (tab10 in first-appearance order).
+    cmap = plt.get_cmap("tab10")
+    for ax in cells:
+      self.assertEqual(len(ax.get_lines()), n_groups)
+      self.assertEqual(len(ax.collections), n_groups)
+      for i, ln in enumerate(ax.get_lines()):
+        np.testing.assert_allclose(
+            matplotlib.colors.to_rgba(ln.get_color())[:3], cmap(i)[:3]
+        )
+    # The five entries do not fit one row of the figure, so the legend is laid
+    # out in several columns (entries of one column share their left edge)
+    # and several rows -- but not one entry per column.
+    renderer = fig.canvas.get_renderer()
+    column_edges = {
+        round(t.get_window_extent(renderer=renderer).x0)
+        for t in legend.get_texts()
+    }
+    row_edges = {
+        round(t.get_window_extent(renderer=renderer).y0)
+        for t in legend.get_texts()
+    }
+    self.assertGreater(len(column_edges), 1)
+    self.assertLess(len(column_edges), n_groups + 1)
+    self.assertGreater(len(row_edges), 1)
+    # The legend spans no more than the cells' row.
+    leg_box = legend.get_window_extent(renderer=renderer)
+    row_x0 = cells[0].get_window_extent(renderer=renderer).x0
+    row_x1 = cells[-1].get_window_extent(renderer=renderer).x1
+    tol = 2.0  # pixels
+    self.assertGreaterEqual(leg_box.x0, row_x0 - tol)
+    self.assertLessEqual(leg_box.x1, row_x1 + tol)
 
   def test_response_band_is_the_95pct_range_of_row_slopes(self):
     """The band is the 2.5-97.5% range of theta_i = KPI_i / f_i times the curve."""
@@ -755,35 +876,48 @@ class ReportFilenameTest(unittest.TestCase):
 class GenerateHtmlReportTest(unittest.TestCase):
   """``generate_html_report`` builds a self-contained HTML report."""
 
+  def _write_run(self, tmp, metadata):
+    """Writes ``metadata`` and the two consolidated CSVs the report needs."""
+    with open(os.path.join(tmp, "metadata.json"), "w") as f:
+      json.dump(metadata, f)
+    step4 = os.path.join(tmp, "step4_consolidated_results")
+    os.makedirs(step4, exist_ok=True)
+    pd.DataFrame({
+        "date": ["2023-01-01", "2023-01-08"],
+        "sales": [100.0, 120.0],
+        "tv_spend": [10.0, 15.0],
+        "estimated_incremental_KPI_tv_spend": [20.0, 30.0],
+    }).to_csv(os.path.join(step4, "consolidated_1a_full_df.csv"), index=False)
+    pd.DataFrame({
+        "treatment_col": ["tv_spend", "Total"],
+        "model_group": ["lgbm_lgbm_5_2_5_0", ""],
+        "total_input": [25.0, 25.0],
+        "total_estimated_incremental_KPI": [50.0, 50.0],
+        "total_estimated_roi": [2.0, 2.0],
+    }).to_csv(os.path.join(step4, "consolidated_3b_summary.csv"), index=False)
+
+  @staticmethod
+  def _header_rows(html):
+    """The ``<strong>label:</strong> value`` rows of the header box, in order."""
+    start = html.index('class="header-bg"')
+    end = html.index('class="tab-buttons"', start)
+    return re.findall(
+        r"<strong>([^<]+):</strong> ([^<]*?) ?(?:<br>|\n)", html[start:end]
+    )
+
   def test_generates_report_without_ai_assistant_tab(self):
     """Generates the HTML report without any AI Assistant elements."""
     with tempfile.TemporaryDirectory() as tmp:
-      with open(os.path.join(tmp, "metadata.json"), "w") as f:
-        json.dump(
-            {
-                "treatment_cols": ["tv_spend"],
-                "outcome_col": "sales",
-                "treatment_types": {"tv_spend": "spend"},
-                "x_cols_list": [["price"]],
-                "date_col": "date",
-            },
-            f,
-        )
-      step4 = os.path.join(tmp, "step4_consolidated_results")
-      os.makedirs(step4, exist_ok=True)
-      pd.DataFrame({
-          "date": ["2023-01-01", "2023-01-08"],
-          "sales": [100.0, 120.0],
-          "tv_spend": [10.0, 15.0],
-          "estimated_incremental_KPI_tv_spend": [20.0, 30.0],
-      }).to_csv(os.path.join(step4, "consolidated_1a_full_df.csv"), index=False)
-      pd.DataFrame({
-          "treatment_col": ["tv_spend", "Total"],
-          "model_group": ["lgbm_lgbm_5_2_5_0", ""],
-          "total_input": [25.0, 25.0],
-          "total_estimated_incremental_KPI": [50.0, 50.0],
-          "total_estimated_roi": [2.0, 2.0],
-      }).to_csv(os.path.join(step4, "consolidated_3b_summary.csv"), index=False)
+      self._write_run(
+          tmp,
+          {
+              "treatment_cols": ["tv_spend"],
+              "outcome_col": "sales",
+              "treatment_types": {"tv_spend": "spend"},
+              "x_cols_list": [["price"]],
+              "date_col": "date",
+          },
+      )
 
       report_path = html_extraction.generate_html_report(tmp)
       self.assertEqual(
@@ -794,6 +928,81 @@ class GenerateHtmlReportTest(unittest.TestCase):
       self.assertIn("tab_001_total", html)
       self.assertNotIn("tab_ai_assistant", html)
       self.assertNotIn("AI Assistant", html)
+      # Header without a saturation family: no Phase 0, the treatment is
+      # linear.  The two rows sit between CATE Intercept and Simple
+      # Optimization.
+      labels = [label for label, _ in self._header_rows(html)]
+      self.assertEqual(
+          labels[labels.index("CATE Intercept") :],
+          ["CATE Intercept", "Selected family", "Decision",
+           "Simple Optimization"],
+      )
+      rows = dict(self._header_rows(html))
+      self.assertEqual(
+          rows["Selected family"], "None (no saturation family configured)"
+      )
+      self.assertEqual(rows["Decision"], "linear")
+      self.assertEqual(rows["Simple Optimization"], "n/a")
+
+  def _header_rows_of_run(self, metadata):
+    """Renders a run with ``metadata`` and returns its header rows as a dict."""
+    with tempfile.TemporaryDirectory() as tmp:
+      self._write_run(tmp, metadata)
+      report_path = html_extraction.generate_html_report(tmp)
+      with open(report_path, encoding="utf-8") as f:
+        return dict(self._header_rows(f.read()))
+
+  def test_header_reports_phase0_family_and_decision(self):
+    """Saturation run: the adopted family and the 1-SE decision per treatment."""
+    base = {
+        "treatment_cols": ["tv_spend"],
+        "outcome_col": "sales",
+        "treatment_types": {"tv_spend": "spend"},
+        "x_cols_list": [["price"]],
+        "date_col": "date",
+        "saturation_family": "tanh",
+        "simple_optimization": False,
+    }
+    # One treatment: the bare values.
+    rows = self._header_rows_of_run({
+        **base,
+        "saturation_selected_family": {"tv_spend": "tanh"},
+        "saturation_phase0": {
+            "tv_spend": {
+                "decision": "saturation",
+                "selected_family": "tanh",
+                "alpha_hat": 0.02,
+            }
+        },
+    })
+    self.assertEqual(rows["Selected family"], "tanh")
+    self.assertEqual(rows["Decision"], "saturation")
+    self.assertEqual(rows["Simple Optimization"], "False")
+    # Several treatments: one entry per treatment, in pipeline order; a
+    # treatment kept linear by the 1-SE test shows family None.
+    rows = self._header_rows_of_run({
+        **base,
+        "treatment_cols": ["tv_spend", "digital_spend"],
+        "treatment_types": {"tv_spend": "spend", "digital_spend": "spend"},
+        "saturation_selected_family": {
+            "tv_spend": "tanh",
+            "digital_spend": None,
+        },
+        "saturation_phase0": {
+            "tv_spend": {"decision": "saturation", "selected_family": "tanh"},
+            "digital_spend": {"decision": "linear", "selected_family": None},
+        },
+    })
+    self.assertEqual(
+        rows["Selected family"], "tv_spend: tanh, digital_spend: None"
+    )
+    self.assertEqual(
+        rows["Decision"], "tv_spend: saturation, digital_spend: linear"
+    )
+    # A family configured but no Phase 0 record (older metadata): n/a.
+    rows = self._header_rows_of_run(base)
+    self.assertEqual(rows["Selected family"], "n/a")
+    self.assertEqual(rows["Decision"], "n/a")
 
 
 if __name__ == "__main__":

@@ -487,9 +487,20 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
       self.assertIn("Cluster DML Keys", html)
       self.assertIn("Meaning of T/c", html)
       # Header: the optimizer actually in force (derived False here, the
-      # linear fallback does not rewrite it).
+      # linear fallback does not rewrite it), and the Phase 0 outcome: the
+      # 1-SE test kept the treatment linear, so no family was adopted.
       self.assertIn(
           "<strong>Simple Optimization:</strong> False", html
+      )
+      self.assertIn("<strong>Selected family:</strong> None <br>", html)
+      self.assertIn("<strong>Decision:</strong> linear <br>", html)
+      self.assertLess(
+          html.index("<strong>CATE Intercept:</strong>"),
+          html.index("<strong>Selected family:</strong>"),
+      )
+      self.assertLess(
+          html.index("<strong>Decision:</strong>"),
+          html.index("<strong>Simple Optimization:</strong>"),
       )
       # 007_optimization (spend): the simple optimizer's chart, the outcome
       # chart (observed vs projected sales, shared with the saturation-aware

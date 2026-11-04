@@ -695,7 +695,7 @@ Everything goes under `output_dir`
 | `000_saturation` *(saturation runs)* | the fitted curve, the 1-SE decision and the Phase 0 diagnostics |
 | `001_total` | incremental KPI over time with its 95% band, the ROI bars, the totals table — start here |
 | `002_geo`, `003_item` | the same per region / product; the comparison chart ranks the entities by ROI |
-| `004_cate` | the fitted CATE equation, response curves per covariate and the scatter matrix |
+| `004_cate` | the fitted CATE equation, the scatter matrix and the response curve per treatment (plus the total) |
 | `005_prior` | ROI and contribution priors (Normal / LogNormal / Beta) fitted for MMM use |
 | `006_sensitivity` | the Cinelli–Hazlett contour per scope and the robustness value (Chapter 8) |
 | `007_optimization` *(with `optimize=True`)* | spend, incremental KPI and ROI before/after, and the yearly matrix (Chapter 9) |

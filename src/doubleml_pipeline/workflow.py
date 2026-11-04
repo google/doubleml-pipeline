@@ -4710,7 +4710,7 @@ class CausalWorkflowOrchestrator:
     cont_cols = [c for c in all_cate_covs if df_est[c].nunique() > 2]
     bin_cols = [c for c in all_cate_covs if df_est[c].nunique() <= 2]
     print("  ├─ Generating CATE Scatter Matrix...", flush=True)
-    cate_axis_limits = plots.plot_cate_scatter_matrix(
+    plots.plot_cate_scatter_matrix(
         df_1a_consolidated,
         self.d_cols,
         cont_cols,
@@ -4719,21 +4719,18 @@ class CausalWorkflowOrchestrator:
         os.path.join(cate_graph_dir, "cate_scatter_matrix.png"),
         cate_stats_dict,
     )
-    # The companion chart: the response curve behind the dots, per binary
-    # covariate group, on the same axes.  Under a saturation family the
-    # curve is theta * fbar(T / c; alpha_hat, T_ref) in RAW treatment units
+    # The companion chart: one cell per treatment (plus the total) in a single
+    # row, the response curve per binary covariate group, all cells on one
+    # scale from the origin.  Under a saturation family the curve is
+    # theta * fbar(T / c; alpha_hat, T_ref) in RAW treatment units
     # (normalization bridge: c is the row's scaler divisor); otherwise a line.
     print("  ├─ Generating CATE Response Curves...", flush=True)
     plots.plot_cate_response_curves(
         df_1a_consolidated,
         self.d_cols,
-        cont_cols,
         bin_cols,
-        cate_eq_dict,
         os.path.join(cate_graph_dir, "cate_response_curves.png"),
-        cate_stats_dict,
         response_specs=self._cate_response_specs(df_1a_consolidated),
-        axis_limits=cate_axis_limits,
     )
 
     print("  ├─ Generating Prior Distributions & CSV...", flush=True)
