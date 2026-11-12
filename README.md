@@ -124,6 +124,30 @@ the data cannot pin the curve down. Enabling it is a one-key change
 
 ![Fitted saturation curve of a treatment, normalized through the reference point (T_ref, 1), with the 1-SE envelope and the identity candidate](docs/img/hero_saturation.png)
 
+### Agentic AI utilization for insight generation
+
+Reading a finished run — which treatments paid back, where and when they worked,
+whether the diagnostics hold and how the budget should shift — can be handed to
+an AI agent. This is **not integrated into `doubleml-pipeline` itself**, so the
+package carries no LLM dependency: a Gemini agent built with
+[`google-adk`](https://google.github.io/adk-docs/) and a Gemini API key from
+[Google AI Studio](https://aistudio.google.com/apikey) loads the bundled
+[`causal-insights`](skills/causal-insights/SKILL.md) skill, inspects
+`metadata.json` and the `step4_consolidated_results/` CSVs of any `output_dir`,
+writes the insights with **Fact / Inference / Hypothesis** tags and answers
+follow-up questions in a chat.
+
+Sample code: the *Agentic AI Integration* section at the end of the example
+notebooks
+[`IN_skincare`](examples/IN_skincare/doubleml-pipeline_sample_notebook_IN.ipynb)
+and
+[`JP_retailer`](examples/JP_retailer/doubleml-pipeline_sample_notebook_JP.ipynb)
+(open them in Colab from [Documentation](#documentation)). The skill also works
+with other agents; see
+[Analyzing results with AI agents](#analyzing-results-with-ai-agents).
+
+![The agent's answer in the IN_skincare notebook to "Please explain discount ROI by Geo": a result summary and the analysis setup tagged Fact / Inference / Hypothesis, the discount ROI by geography with 95% intervals, break-even margins and verdicts, and what drives the regional differences](docs/img/hero_agentic_geo_roi.jpg)
+
 --------------------------------------------------------------------------------
 
 ## Installation
