@@ -30,8 +30,10 @@
 * ``_model_group_label``: FLAML learner names that contain an underscore
   (``extra_tree``, ``xgb_limitdepth``) must not collide.
 * The Phase 0 progress display (the eight display items, their order and
-  formats) and Diag6 (unit consistency of T_ref at the Phase 1 hand-over; the
-  mismatch case stops ``run_full_pipeline`` before Phase 1 starts).
+  formats), Diag6 (unit consistency of T_ref at the Phase 1 hand-over; the
+  mismatch case stops ``run_full_pipeline`` before Phase 1 starts) and Phase
+  1-3 scaler filtering + Phase 4 KPI-unit theta recovery without double
+  scaling.
 
 Nothing here runs a complete pipeline: the full ``run_full_pipeline`` guards
 live in test_workflow_e2e.py, the spec acceptance tests in test_acceptance.py
@@ -51,6 +53,7 @@ from unittest import mock
 import warnings
 
 from doubleml_pipeline import workflow
+from doubleml_pipeline.evaluation import alpha_selection
 from doubleml_pipeline.evaluation import runner
 from doubleml_pipeline.models import saturation
 from doubleml_pipeline.preprocessing import scalers
@@ -1405,6 +1408,301 @@ class Diag6Test(unittest.TestCase):
       # The treatment Phases 1-3 receive is fbar in [0, >1), not raw spend.
       self.assertLess(float(df_fit["spend"].max()), 10.0)
       self.assertGreater(float(df["spend"].max()), 10.0)
+
+
+class _StopAfterPhase1InputsError(Exception):
+  """Raised by the spy that cuts a run short once Phase 1 has its inputs."""
+
+
+class Phase1ScalerAndThetaTest(unittest.TestCase):
+  """Regression tests preventing double-scaling of saturated treatments."""
+
+  # pylint: disable=protected-access
+
+  def test_scaler_for_phase1_strips_only_saturated_treatments(self):
+    """Omits saturated treatments from Phase 1-3 scaling, keeping linear ones."""
+    with tempfile.TemporaryDirectory() as out_dir:
+      orch = workflow.CausalWorkflowOrchestrator(
+          y_col="sales",
+          d_cols=["spend_sat", "spend_lin"],
+          x_cols_list=[["X1", "X2"], ["X1", "X2"]],
+          ml_models_y=["rf"],
+          ml_models_t=["rf"],
+          n_folds_list=[2],
+          output_dir=out_dir,
+          covariates_for_cate_list=[["X1"], ["X1"]],
+          saturation_config={"saturation": {"family": "tanh"}},
+      )
+      dummy_grid = np.array([1.0])
+      dummy_seed_loss = np.array([[1.0]])
+      orch._alpha_results = {
+          "spend_sat": alpha_selection.AlphaSelectionResult(
+              alpha_hat=1.0,
+              alpha_grid=dummy_grid,
+              mean_loss=dummy_grid,
+              per_seed_loss=dummy_seed_loss,
+              per_seed_alpha=dummy_grid,
+              grid_alpha_hat=1.0,
+              family="tanh",
+              selected_family="tanh",
+              decision="saturation",
+              t_ref=1.0,
+              t_max=2.0,
+          ),
+          "spend_lin": alpha_selection.AlphaSelectionResult(
+              alpha_hat=1.0,
+              alpha_grid=dummy_grid,
+              mean_loss=dummy_grid,
+              per_seed_loss=dummy_seed_loss,
+              per_seed_alpha=dummy_grid,
+              grid_alpha_hat=1.0,
+              family="tanh",
+              selected_family=None,
+              decision="linear",
+              t_ref=1.0,
+              t_max=2.0,
+          ),
+      }
+      scaler = scalers.CausalDataScaler(
+          population_median_normalize_cols=["spend_sat", "spend_lin", "sales"],
+          median_normalize_cols=["spend_sat"],
+          standardize_cols=["X1"],
+          population_col="population",
+      )
+      phase1_scaler = orch._scaler_for_phase1(scaler)
+
+      # Only the saturated treatment is stripped from scaling lists.
+      self.assertEqual(
+          phase1_scaler.population_median_normalize_cols,
+          ["spend_lin", "sales"],
+      )
+      self.assertEqual(phase1_scaler.median_normalize_cols, [])
+      self.assertEqual(phase1_scaler.standardize_cols, ["X1"])
+      # Caller's original scaler lists remain untouched.
+      self.assertEqual(
+          scaler.population_median_normalize_cols,
+          ["spend_sat", "spend_lin", "sales"],
+      )
+      self.assertEqual(scaler.median_normalize_cols, ["spend_sat"])
+
+  def test_run_full_pipeline_keeps_fbar_unscaled_when_population_normalized(
+      self,
+  ):
+    """Phases 1-3 receive fbar once without re-dividing by population/median.
+
+    Each run is cut short as soon as ``prepare_run_inputs`` has produced the
+    Phase 1 inputs: the assertions read nothing that comes later, and the full
+    runs live in test_workflow_e2e.py.
+    """
+    rng = np.random.default_rng(7)
+    n_weeks = 30
+    pops = [100.0, 150.0, 200.0, 500.0, 1000.0, 2000.0]
+    dates = pd.date_range("2022-01-03", periods=n_weeks, freq="7D")
+    rows = []
+    for g, pop in enumerate(pops):
+      for d in dates:
+        x1 = float(rng.normal())
+        x2 = float(rng.normal())
+        spend_per_pop = float(max(0.1, rng.gamma(2.0, 1.5)))
+        rows.append({
+            "date": d,
+            "geo": f"G{g}",
+            "item": f"I{g % 2}",
+            "spend": pop * spend_per_pop,
+            "X1": x1,
+            "X2": x2,
+            "sales": pop * (20.0 + 3.0 * np.sqrt(spend_per_pop) + 2.0 * x1),
+            "population": pop,
+        })
+    df = pd.DataFrame(rows)
+
+    def _run_and_capture(linear_test_k: float, fallback_half: float = None):
+      captured = []
+      orig_prepare = runner.prepare_run_inputs
+
+      def spy_prepare(df_orig, sc, df_score, cate_cols, cate_structure):
+        res = orig_prepare(df_orig, sc, df_score, cate_cols, cate_structure)
+        captured.append((df_orig.copy(), df_score, res))
+        raise _StopAfterPhase1InputsError()
+
+      alpha_sel_cfg = {
+          "n_seeds": 1,
+          "k_folds": 2,
+          "refine": "none",
+          "linear_test_k": linear_test_k,
+      }
+      if fallback_half is not None:
+        alpha_sel_cfg["fallback_half_saturation_T"] = fallback_half
+
+      with tempfile.TemporaryDirectory() as out_dir:
+        scaler = scalers.CausalDataScaler(
+            population_median_normalize_cols=["spend", "sales"],
+            standardize_cols=["X1", "X2"],
+            population_col="population",
+        )
+        orch = workflow.CausalWorkflowOrchestrator(
+            y_col="sales",
+            d_cols=["spend"],
+            x_cols_list=[["X1", "X2"]],
+            ml_models_y=["rf"],
+            ml_models_t=["rf"],
+            n_folds_list=[2],
+            output_dir=out_dir,
+            covariates_for_cate_list=[["X1"]],
+            time_budget=1,
+            n_jobs=1,
+            hparam_policy="per_fold",
+            date_col="date",
+            geo_col="geo",
+            item_col="item",
+            run_sensitivity=False,
+            generate_html=False,
+            optimize=False,
+            saturation_config={
+                "saturation": {
+                    "family": "power",
+                    "grid": {
+                        "min": 0.3,
+                        "max": 0.7,
+                        "num": 3,
+                        "scale": "linear",
+                    },
+                    "basis_dim_T": 4,
+                },
+                "alpha_selection": alpha_sel_cfg,
+            },
+        )
+        with mock.patch.object(
+            workflow.runner, "prepare_run_inputs", side_effect=spy_prepare
+        ), warnings.catch_warnings(), contextlib.redirect_stdout(
+            io.StringIO()
+        ):
+          warnings.simplefilter("ignore")
+          with self.assertRaises(_StopAfterPhase1InputsError):
+            orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=1)
+        return orch, captured[0]
+
+    # 1. Saturation adopted: df_norm['spend'] MUST equal fbar directly (no 2nd
+    #    division by population or median).
+    orch_sat, (df_orig_sat, df_score_sat, prep_sat) = _run_and_capture(
+        linear_test_k=-1e12, fallback_half=0.5
+    )
+    self.assertEqual(orch_sat._selected_family["spend"], "power")
+    np.testing.assert_allclose(
+        prep_sat.df_norm["spend"].to_numpy(),
+        df_orig_sat["spend"].to_numpy(),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    self.assertIsNotNone(prep_sat.df_norm_score)
+    np.testing.assert_allclose(
+        prep_sat.df_norm_score["spend"].to_numpy(),
+        df_score_sat["spend"].to_numpy(),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+
+    # 2. Linear fallback: df_norm['spend'] MUST still be population-normalized
+    #    once (NOT equal to raw spend).
+    orch_lin, (df_orig_lin, _, prep_lin) = _run_and_capture(linear_test_k=1e9)
+    self.assertIsNone(orch_lin._selected_family["spend"])
+    ratio_per_pop = df_orig_lin["spend"] / (
+        df_orig_lin["population"] * prep_lin.df_norm["spend"]
+    )
+    self.assertLess(float(ratio_per_pop.std()), 1e-10)
+
+  def test_compute_theta_for_optimization_handles_pop_scaled_y_and_zero_spend(
+      self,
+  ):
+    """T = 0 rows recover population-proportional theta when Y is pop-scaled."""
+    rng = np.random.default_rng(11)
+    pops = [100.0, 200.0, 1000.0, 5000.0]
+    rows = []
+    for g, pop in enumerate(pops):
+      for w in range(20):
+        x1 = float(rng.normal())
+        spend = 0.0 if w < 4 else float(pop * rng.gamma(2.0, 1.0))
+        rows.append({
+            "date": pd.Timestamp("2022-01-03") + pd.Timedelta(weeks=w),
+            "geo": f"G{g}",
+            "item": "I0",  # Same item shared across all populations.
+            "spend": spend,
+            "X1": x1,
+            "sales": 100.0 * pop,
+            "population": pop,
+        })
+    df_est = pd.DataFrame(rows)
+    df_fit = df_est.iloc[:60].copy()
+
+    with tempfile.TemporaryDirectory() as out_dir:
+      orch = workflow.CausalWorkflowOrchestrator(
+          y_col="sales",
+          d_cols=["spend"],
+          x_cols_list=[["X1"]],
+          ml_models_y=["rf"],
+          ml_models_t=["rf"],
+          n_folds_list=[2],
+          output_dir=out_dir,
+          covariates_for_cate_list=[["X1"]],
+          cate_structure_list=["X1"],
+          geo_col="geo",
+          item_col="item",
+          saturation_config={"saturation": {"family": "power"}},
+      )
+      orch._alpha_hat["spend"] = 0.5
+      orch._selected_family["spend"] = "power"
+      orch._t_ref["spend"] = 4.0
+      div_info = alpha_selection.resolve_treatment_divisor(
+          scalers.CausalDataScaler(
+              population_median_normalize_cols=["spend", "sales"],
+              standardize_cols=["X1"],
+              population_col="population",
+          ),
+          "spend",
+          df_fit,
+      )
+      orch._treatment_divisor["spend"] = pd.Series(
+          df_est["population"].to_numpy() * div_info.constant,
+          index=df_est.index,
+      )
+
+      phase1_scaler = scalers.CausalDataScaler(
+          population_median_normalize_cols=["sales"],
+          standardize_cols=["X1"],
+          population_col="population",
+      )
+      df_fit_norm = phase1_scaler.fit_transform(df_fit)
+      del df_fit_norm
+      df_all_norm = phase1_scaler.transform(df_est)
+
+      # True CATE on Y_norm scale: beta0 + beta1 * X1_norm.
+      beta0, beta1 = 0.2, 0.05
+      effect_norm = beta0 + beta1 * df_all_norm["X1"].to_numpy()
+      m_y = phase1_scaler.pop_median_params_["sales"]["median_val_per_pop"]
+      true_theta_kpi = effect_norm * m_y * df_est["population"].to_numpy()
+      f_values = saturation.normalized_saturation(
+          orch._normalized_treatment("spend", df_est), "power", 0.5, 4.0
+      )
+      df_1a = pd.DataFrame(
+          {
+              "estimated_incremental_KPI_spend": true_theta_kpi * f_values,
+              "spend_transformed": f_values,
+          },
+          index=df_est.index,
+      )
+      best_model_data = {
+          "df_1a": df_1a,
+          "cate_coef_dict": {
+              "Intercept_coef": beta0,
+              "X1_coef": beta1,
+          },
+      }
+      got_theta = orch._compute_theta_for_optimization(
+          "spend", 0, df_est, phase1_scaler, best_model_data
+      )
+      np.testing.assert_allclose(
+          got_theta, true_theta_kpi, rtol=1e-6, atol=1e-6
+      )
 
 
 if __name__ == "__main__":

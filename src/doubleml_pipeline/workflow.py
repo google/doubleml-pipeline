@@ -164,6 +164,16 @@ def parallel_section(workers: int, threads: int):
 # aggregation of workflow Phase 3 reads nothing else from repetitions >= 1).
 REP_RESULT_KEYS = ("model_name", "model_group", "metrics_1c", "cate_coef_dict")
 
+# Column-list attributes on CausalDataScaler iterated when extending or
+# filtering scaling configuration across pipeline phases.
+_SCALER_COL_LISTS = (
+    "standardize_cols",
+    "population_standardize_cols",
+    "population_median_normalize_cols",
+    "min_max_cols",
+    "median_normalize_cols",
+)
+
 
 def rep_df_columns(d_col: str, gt_col: Optional[str]) -> List[str]:
   """The ``df_1a`` columns kept for repetitions >= 1."""
@@ -1685,13 +1695,7 @@ class CausalWorkflowOrchestrator:
       new_cols: List[str],
   ) -> None:
     """Adds `new_cols` to every scaler list that names the price column."""
-    for list_name in (
-        "standardize_cols",
-        "population_standardize_cols",
-        "population_median_normalize_cols",
-        "min_max_cols",
-        "median_normalize_cols",
-    ):
+    for list_name in _SCALER_COL_LISTS:
       cols = getattr(scaler, list_name, None)
       if not cols or base not in cols:
         continue
@@ -1704,6 +1708,48 @@ class CausalWorkflowOrchestrator:
           " list",
           flush=True,
       )
+
+  def _scaler_for_phase1(
+      self, scaler: scalers.CausalDataScaler
+  ) -> scalers.CausalDataScaler:
+    """Returns a copy of `scaler` excluding saturation-transformed columns.
+
+    `_apply_saturation_transform` replaces every adopted-saturation treatment
+    column in `df_fit` / `_score_frame` with `fbar(T / c; alpha_hat, T_ref)`,
+    where `c` is already Phase 0's scaling divisor (`median` or
+    `population * median_per_pop`). Keeping that column in Phases 1-3's scaler
+    lists would scale the already-normalized `fbar` column a second time — in
+    particular dividing by population twice under
+    `population_median_normalize_cols`. Treatments on the linear path
+    (`selected_family is None` or `sat_family is None`) stay raw in `df_fit`
+    and keep their scaler entries.
+
+    Args:
+      scaler: The pipeline scaler passed to `run_full_pipeline`.
+
+    Returns:
+      A deep copy of `scaler` with saturation-transformed treatment columns
+      removed from every scaling column list.
+    """
+    phase1_scaler = copy.deepcopy(scaler)
+    if self.sat_family is None or not self._alpha_results:
+      return phase1_scaler
+    saturated_cols = {
+        d_col
+        for d_col, result in self._alpha_results.items()
+        if result.selected_family is not None
+    }
+    if not saturated_cols:
+      return phase1_scaler
+    for list_name in _SCALER_COL_LISTS:
+      cols = getattr(phase1_scaler, list_name, None)
+      if cols:
+        setattr(
+            phase1_scaler,
+            list_name,
+            [col for col in cols if col not in saturated_cols],
+        )
+    return phase1_scaler
 
   def _monitor_phase0_progress(
       self,
@@ -2293,7 +2339,30 @@ class CausalWorkflowOrchestrator:
     basis_theta = None
     try:
       scaler_local = copy.deepcopy(scaler)
-      df_norm = scaler_local.fit_transform(df_est)
+      is_fitted = any(
+          bool(getattr(scaler_local, attr, None))
+          for attr in (
+              "standard_params_",
+              "min_max_params_",
+              "median_params_",
+              "pop_standard_params_",
+              "pop_median_params_",
+          )
+      )
+      pop_col = getattr(scaler_local, "population_col", None)
+      if is_fitted:
+        raw_pop = getattr(scaler_local, "raw_population_", None)
+        if pop_col and pop_col in df_est.columns:
+          extra_pop = df_est[pop_col]
+          if raw_pop is None:
+            scaler_local.raw_population_ = extra_pop.copy()
+          else:
+            missing = extra_pop.loc[~extra_pop.index.isin(raw_pop.index)]
+            if not missing.empty:
+              scaler_local.raw_population_ = pd.concat([raw_pop, missing])
+        df_norm = scaler_local.transform(df_est)
+      else:
+        df_norm = scaler_local.fit_transform(df_est)
       basis_builder = self._cate_basis_builder(
           d_col,
           self.x_cols_list[idx],
@@ -2304,6 +2373,21 @@ class CausalWorkflowOrchestrator:
       basis_theta = optimization.compute_basis_theta(
           basis_df, best_model_data.get("cate_coef_dict", {}) or {}
       )
+      if basis_theta is not None:
+        # Express basis_theta in KPI units (including per-row population scale
+        # when y_col is population-normalized/standardized) so it matches
+        # ratio = kpi_values / f_values across rows with varying population.
+        theta_df = pd.DataFrame(
+            {"_basis_theta": basis_theta}, index=df_est.index
+        )
+        if pop_col and pop_col in df_est.columns:
+          theta_df[pop_col] = df_est[pop_col]
+        basis_theta = scaler_local.inverse_transform_column(
+            theta_df,
+            "_basis_theta",
+            param_source_col=self.y_col,
+            is_difference=True,
+        ).to_numpy(dtype=float)
     except Exception as exc:  # pylint: disable=broad-except
       warnings.warn(
           f"Could not rebuild the CATE basis for '{d_col}' ({exc}); falling"
@@ -4098,6 +4182,7 @@ class CausalWorkflowOrchestrator:
     df_fit = self._apply_saturation_transform(df_fit)
     df_score = self._score_frame
     row_order = df_est.index
+    phase1_scaler = self._scaler_for_phase1(scaler)
 
     best_model_data_dict: Dict[str, Dict[str, Any]] = {}
     # Exposed as `self.best_model_data` (reset on every run).
@@ -4144,7 +4229,7 @@ class CausalWorkflowOrchestrator:
       # CATE basis p(X) of this treatment are computed ONCE here and handed
       # to every Phase 1 task and Phase 3 repetition.
       prepared = runner.prepare_run_inputs(
-          df_fit, scaler, df_score, cate_cols, cate_structure
+          df_fit, phase1_scaler, df_score, cate_cols, cate_structure
       )
       # The parallel plan (W, h) of Phase 1 and its log line.
       workers_p1, threads_p1 = self._parallel_plan(total_p1_tasks)
@@ -4190,7 +4275,7 @@ class CausalWorkflowOrchestrator:
                   cate_structure,
                   gt_col,
                   df_fit,
-                  scaler,
+                  phase1_scaler,
                   process_log,
                   df_score=df_score,
                   row_order=row_order,
@@ -4293,7 +4378,7 @@ class CausalWorkflowOrchestrator:
                     cate_structure,
                     gt_col,
                     df_fit,
-                    scaler,
+                    phase1_scaler,
                     rep,
                     temp_p3_dir,
                     df_score=df_score,
@@ -5040,7 +5125,7 @@ class CausalWorkflowOrchestrator:
                 d_col,
                 d_idx,
                 df_est,
-                scaler,
+                phase1_scaler,
                 best_model_data_dict[d_col],
             )
             # Normalization bridge: alpha_hat lives on the

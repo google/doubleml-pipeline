@@ -21,7 +21,9 @@
   (``price_gap``), with the benchmark among the covariates and the price
   investment built from ``sales_col``.
 * ``family`` set: Phase 0 (Stage A split + Stage B alpha selection) and the
-  Phase 4 saturation-aware optimizer both run and emit their artifacts.
+  Phase 4 saturation-aware optimizer both run and emit their artifacts,
+  including under ``population_median_normalize_cols`` with widely varying geo
+  populations.
 * Non-spend treatments (``percentage`` / ``impressions`` / ``price``) never
   reach the saturation-aware optimizer.
 * The Phase 4 linear fallback when Phase 0 decides "linear".
@@ -1195,6 +1197,167 @@ class SaturationEndToEndTest(unittest.TestCase):
       self.assertTrue(summary["fallback_half_saturation_T_used"])
       self.assertAlmostEqual(summary["alpha_hat"], 0.5)
       self.assertEqual(summary["se_method"], "two-way")
+
+
+class PopulationMedianSaturationEndToEndTest(unittest.TestCase):
+  """End-to-end guard for Saturation DML x ``population_median_normalize_cols``.
+
+  Existing end-to-end tests in this file either use ``median_normalize_cols``
+  or a constant ``population=1000.0``. When ``population`` varies widely across
+  geos and both treatment and outcome are in
+  ``population_median_normalize_cols``, scaling the saturation-transformed
+  treatment column again by population in Phases 1-3 would collapse large-geo
+  KPI and ROI while starving large geos in Phase 4 optimization.
+
+  FLAML is patched with ``helpers.deterministic_fit`` so nuisance estimation
+  stays fast and deterministic.
+  """
+
+  def test_varying_population_recovers_geo_roi_and_allocation(self):
+    """Per-geo ROI matches truth across 20x population differences."""
+    rng = np.random.default_rng(123)
+    pops = [100.0, 100.0, 500.0, 500.0, 2000.0, 2000.0]
+    dates = pd.date_range("2022-01-03", periods=35, freq="W")
+    rows = []
+    for g, pop in enumerate(pops):
+      for w, d in enumerate(dates):
+        x1 = float(rng.normal())
+        x2 = float(rng.normal())
+        # Include ~10% zero-spend rows to exercise T = 0 theta recovery as well.
+        if w % 10 == 0:
+          spend_per_pop = 0.0
+        else:
+          spend_per_pop = float(
+              max(0.2, 1.5 + 0.3 * x1 - 0.2 * x2 + rng.gamma(1.5, 0.8))
+          )
+        spend = pop * spend_per_pop
+        true_effect = pop * 3.0 * np.sqrt(spend_per_pop)
+        sales = (
+            pop * (30.0 + 3.0 * x1 - 1.5 * x2 + rng.normal(0.0, 0.3))
+            + true_effect
+        )
+        rows.append({
+            "date": d,
+            "geo": f"G{g}",
+            "item": f"I{g % 2}",
+            "spend": spend,
+            "X1": x1,
+            "X2": x2,
+            "sales": sales,
+            "true_effect": true_effect,
+            "population": pop,
+        })
+    df = pd.DataFrame(rows)
+
+    with tempfile.TemporaryDirectory() as out_dir:
+      scaler = scalers.CausalDataScaler(
+          population_median_normalize_cols=["spend", "sales"],
+          standardize_cols=["X1", "X2"],
+          population_col="population",
+      )
+      orch = workflow.CausalWorkflowOrchestrator(
+          y_col="sales",
+          d_cols=["spend"],
+          x_cols_list=[["X1", "X2"]],
+          ml_models_y=["rf"],
+          ml_models_t=["rf"],
+          n_folds_list=[3],
+          output_dir=out_dir,
+          covariates_for_cate_list=[["X1"]],
+          time_budget=1,
+          n_jobs=1,
+          hparam_policy="per_fold",
+          date_col="date",
+          geo_col="geo",
+          item_col="item",
+          ground_truth_existence=True,
+          ground_truth_effect_column=["true_effect"],
+          run_sensitivity=False,
+          generate_html=False,
+          treatment_types={"spend": "spend"},
+          treatment_spend_cols={"spend": "spend"},
+          sales_col="sales",
+          optimize=True,
+          saturation_config={
+              "saturation": {
+                  "family": "power",
+                  "grid": {"min": 0.2, "max": 0.8, "num": 5, "scale": "linear"},
+                  "basis_dim_T": 4,
+              },
+              "alpha_selection": {
+                  "n_seeds": 1,
+                  "k_folds": 2,
+                  "refine": "none",
+                  "linear_test_k": -1e12,
+                  "fallback_half_saturation_T": 0.5,
+              },
+          },
+      )
+      with mock.patch.object(
+          flaml_dml.FlamlRegressorDoubleML, "fit", helpers.deterministic_fit
+      ), warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
+        warnings.simplefilter("ignore")
+        orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=1)
+
+      out = pd.read_csv(helpers.find(out_dir, "consolidated_1a_full_df.csv"))
+      summary = pd.read_csv(os.path.join(out_dir, pipeline_io.SUMMARY_FILE))
+      # pylint: disable=protected-access
+      self.assertEqual(orch._selected_family["spend"], "power")
+      # pylint: enable=protected-access
+      self.assertGreater(float(summary["R_squared"].iloc[0]), 0.80)
+
+      geo_agg = out.groupby("geo", as_index=False)[[
+          "spend",
+          "true_effect",
+          "estimated_incremental_KPI_spend",
+          "optimized_spend",
+          "population",
+      ]].sum()
+      geo_agg["true_roi"] = geo_agg["true_effect"] / geo_agg["spend"]
+      geo_agg["est_roi"] = (
+          geo_agg["estimated_incremental_KPI_spend"] / geo_agg["spend"]
+      )
+      # Every geo (small pop=100 and large pop=2000) recovers true ROI closely.
+      rel_roi_err = (
+          np.abs(geo_agg["est_roi"] - geo_agg["true_roi"]) / geo_agg["true_roi"]
+      )
+      self.assertTrue(
+          (rel_roi_err < 0.20).all(),
+          geo_agg[["geo", "population", "true_roi", "est_roi"]],
+      )
+      small_roi = geo_agg.loc[
+          geo_agg["geo"].isin(["G0", "G1"]), "est_roi"
+      ].mean()
+      large_roi = geo_agg.loc[
+          geo_agg["geo"].isin(["G4", "G5"]), "est_roi"
+      ].mean()
+      self.assertGreater(large_roi / small_roi, 0.8)
+      self.assertLess(large_roi / small_roi, 1.25)
+
+      # Phase 4 optimization allocates substantially larger budget to pop=2000
+      # geos instead of starving them.
+      small_opt = geo_agg.loc[
+          geo_agg["geo"].isin(["G0", "G1"]), "optimized_spend"
+      ].mean()
+      large_opt = geo_agg.loc[
+          geo_agg["geo"].isin(["G4", "G5"]), "optimized_spend"
+      ].mean()
+      self.assertGreater(large_opt / small_opt, 12.0)
+
+      # Zero-spend rows preserve population-scaled theta in optimization too.
+      zero_rows = out[out["spend"] == 0.0]
+      small_zero_opt = zero_rows.loc[
+          zero_rows["geo"].isin(["G0", "G1"]), "optimized_spend"
+      ].mean()
+      large_zero_opt = zero_rows.loc[
+          zero_rows["geo"].isin(["G4", "G5"]), "optimized_spend"
+      ].mean()
+      self.assertGreater(large_zero_opt / small_zero_opt, 12.0)
+
+      opt_metrics = pd.read_csv(
+          helpers.find(out_dir, "optimization_metrics.csv")
+      )
+      self.assertEqual(opt_metrics["saturation_family"].iloc[0], "power")
 
 
 def _daily_geo_panel(n_geo=6, n_days=70, seed=0):
