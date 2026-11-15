@@ -324,6 +324,9 @@ a discount rate in `[0, 1]`, GRPs in the hundreds). The scaler brings them to
 comparable scales for the nuisance models and, crucially, **inverts the
 transformation afterwards** so that every incremental KPI and ROI in the
 outputs is in the original units. Columns you do not list are left untouched.
+A listed column that is not in `df` raises a `ValueError`, and so does a
+column listed more than once (under two options, or twice under one), because
+it would be scaled twice and descaled once.
 
 ### Which option for which variable
 

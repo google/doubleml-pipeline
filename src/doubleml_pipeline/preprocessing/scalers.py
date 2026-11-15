@@ -20,12 +20,22 @@ import numpy as np
 import pandas as pd
 from sklearn import preprocessing
 
+# The column lists of `CausalDataScaler`, one per scaling strategy.
+_SCALING_LISTS = (
+    'standardize_cols',
+    'population_standardize_cols',
+    'population_median_normalize_cols',
+    'min_max_cols',
+    'median_normalize_cols',
+)
+
 
 class CausalDataScaler:
   """Manages various scaling operations for causal inference.
 
   Supports standard scaling, population-based standardization, median
-  normalization, and min-max scaling.
+  normalization, and min-max scaling.  A column may be listed under one
+  strategy only, and once (see ``_check_columns_listed_once``).
   """
 
   def __init__(
@@ -46,6 +56,7 @@ class CausalDataScaler:
     self.min_max_cols = min_max_cols or []
     self.median_normalize_cols = median_normalize_cols or []
     self.population_col = population_col
+    self._check_columns_listed_once()
 
     self.standard_params_: Dict[str, Dict[str, float]] = {}
     self.pop_standard_params_: Dict[str, Dict[str, float]] = {}
@@ -63,8 +74,35 @@ class CausalDataScaler:
           UserWarning,
       )
 
-  # TOD0: The Code doesn't Check if same column is present in multiple lists
-  # This would lead to scaling being applied multiple times to the same column
+  def _check_columns_listed_once(self) -> None:
+    """Raises if a column is listed more than once across the scaling lists.
+
+    ``transform`` applies the scaling of every listing of a column, whereas
+    ``inverse_transform_column`` undoes a single scaling: a column named in
+    two lists, or twice in one list, would be scaled more than once and could
+    not be restored.  The lists are public attributes that can be edited after
+    construction, so the check runs at construction, in ``fit`` and in
+    ``transform``.
+
+    Raises:
+      ValueError: If any column is listed more than once.
+    """
+    listings: Dict[Any, List[str]] = {}
+    for list_name in _SCALING_LISTS:
+      for col in getattr(self, list_name):
+        listings.setdefault(col, []).append(list_name)
+    repeated = {col: names for col, names in listings.items() if len(names) > 1}
+    if repeated:
+      described = '; '.join(
+          f"'{col}' ({', '.join(names)})" for col, names in repeated.items()
+      )
+      raise ValueError(
+          'Column(s) listed more than once across the scaling lists:'
+          f' {described}. List each column in exactly one list, once:'
+          ' transform() applies every listing, so the column would be scaled'
+          ' more than once, while inverse_transform_column() undoes a single'
+          ' scaling.'
+      )
 
   def fit(self, x: pd.DataFrame, y: Optional[Any] = None) -> 'CausalDataScaler':
     """Fits the scaler attributes to the dataset and calculates parameters.
@@ -78,10 +116,12 @@ class CausalDataScaler:
       The fitted scaler instance (``self``).
 
     Raises:
-      ValueError: If ``population_col`` is needed but absent, or if any
-        column named in one of the scaling lists is not in ``x.columns``.
+      ValueError: If a column is listed more than once across the scaling
+        lists, if ``population_col`` is needed but absent, or if any column
+        named in one of the scaling lists is not in ``x.columns``.
     """
     del y  # Unused
+    self._check_columns_listed_once()
     df = x
     needs_pop = (
         self.population_standardize_cols
@@ -96,13 +136,7 @@ class CausalDataScaler:
     # Every configured scaling column must exist: a misspelled name would
     # otherwise be skipped silently and the column left unscaled.
     missing_by_list = {}
-    for list_name in (
-        'standardize_cols',
-        'population_standardize_cols',
-        'population_median_normalize_cols',
-        'min_max_cols',
-        'median_normalize_cols',
-    ):
+    for list_name in _SCALING_LISTS:
       missing = [c for c in getattr(self, list_name) if c not in df.columns]
       if missing:
         missing_by_list[list_name] = missing
@@ -178,6 +212,7 @@ class CausalDataScaler:
   def transform(self, x: pd.DataFrame, y: Optional[Any] = None) -> pd.DataFrame:
     """Applies the fitted scaling parameters to the input data."""
     del y  # Unused parameter
+    self._check_columns_listed_once()
     df = x
     needs_pop = (
         self.population_standardize_cols

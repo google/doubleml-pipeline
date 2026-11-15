@@ -21,8 +21,9 @@
 * ``CausalWorkflowOrchestrator._apply_price_treatments``: the renames of
   ``d_cols`` / ``treatment_types`` / ``treatment_spend_cols``, the benchmark
   column added to ``x_cols``, the investment column (caller's cost column or
-  automatic), the lag treatments, the scaler lists, the metadata records and
-  the restore before a second run.  Nothing here runs a pipeline.
+  automatic), the lag treatments, the scaler lists (extended on the run's own
+  copy), the reserved output names, the metadata records and the restore
+  before a second run.  Nothing here runs a pipeline.
 * ``models.saturation``: the odd extension ``f(T) = -f(-T)`` of the families,
   of the derivative and of the T-basis.
 """
@@ -960,6 +961,131 @@ class OrchestratorPriceTreatmentTest(unittest.TestCase):
     orch = self._orchestrator(["price"], {"price": "price"})
     self._apply(orch, scaler=untouched)
     self.assertEqual(untouched.standardize_cols, ["X1"])
+
+  def test_scaler_listing_a_created_column_is_rejected(self):
+    """Scaler lists name input columns only; the run adds the gap itself."""
+    scaler = scalers.CausalDataScaler(standardize_cols=["price", "price_gap"])
+    orch = self._orchestrator(["price"], {"price": "price"})
+    with self.assertRaisesRegex(
+        ValueError,
+        r"scaler\.standardize_cols: 'price_gap' \(did you mean 'price'\?\)",
+    ):
+      orch.run_full_pipeline(df=self.df, scaler=scaler)
+    # Nothing ran: the configuration still names the price column.
+    self.assertEqual(orch.d_cols, ["price"])
+
+  def test_run_full_pipeline_extends_a_copy_of_the_scaler(self):
+    """The run extends its own copy; the caller's scaler is never modified.
+
+    Each run is cut short at Phase 0 by a stub that records the scaler it is
+    given.  The second run with the same scaler passes the column check
+    again, which it could not if the first run had added ``price_gap`` to the
+    caller's lists.
+    """
+    scaler = scalers.CausalDataScaler(standardize_cols=["price", "X1"])
+    orch = self._orchestrator(["price"], {"price": "price"})
+    received = []
+
+    def stop_at_phase0(df, run_scaler):
+      del df  # Unused.
+      received.append(run_scaler)
+      raise _StopAtPhase0Error()
+
+    for _ in range(2):
+      with mock.patch.object(
+          orch, "_run_phase0", side_effect=stop_at_phase0
+      ), warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
+        warnings.simplefilter("ignore")
+        with self.assertRaises(_StopAtPhase0Error):
+          orch.run_full_pipeline(df=self.df, scaler=scaler)
+    self.assertEqual(scaler.standardize_cols, ["price", "X1"])
+    self.assertEqual(len(received), 2)
+    for run_scaler in received:
+      self.assertIsNot(run_scaler, scaler)
+      self.assertEqual(
+          run_scaler.standardize_cols,
+          ["price", "X1", "price_gap", "price_benchmark"],
+      )
+
+  def test_input_column_named_like_a_created_column_raises(self):
+    """``<d>_gap``, ``<d>_benchmark`` and ``<d>_investment`` are reserved."""
+    for name in ("price_gap", "price_benchmark", "price_investment"):
+      with self.subTest(name=name):
+        orch = self._orchestrator(["price"], {"price": "price"})
+        with self.assertRaises(ValueError) as ctx:
+          self._apply(orch, self.df.assign(**{name: 1.0}))
+        message = str(ctx.exception)
+        self.assertIn(f"column(s) ['{name}']", message)
+        self.assertIn("price treatment(s) ['price']", message)
+        self.assertIn("Please use different names", message)
+        self.assertIn(workflow._PRICE_DOC_URL, message)
+        # Raised before anything is renamed or written.
+        self.assertEqual(orch.d_cols, ["price"])
+        self.assertIsNone(orch._price_config_backup)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.out_dir, "price_benchmark"))
+        )
+    # `run_full_pipeline` stops there, before Phase 0.
+    orch = self._orchestrator(["price"], {"price": "price"})
+    with mock.patch.object(orch, "_run_phase0") as phase0:
+      with self.assertRaisesRegex(ValueError, r"column\(s\) \['price_gap'\]"):
+        orch.run_full_pipeline(
+            df=self.df.assign(price_gap=1.0), scaler=scalers.CausalDataScaler()
+        )
+    phase0.assert_not_called()
+
+  def test_reserved_names_cover_the_lags_listed_as_treatments(self):
+    """A lag treatment reserves ``<d>_gap_l<n>`` and ``<d>_investment_l<n>``."""
+    df = features.create_lagged_features(
+        self.df, ["price"], 1, "date", unit_col=["item", "geo"], na_fill=True
+    ).reset_index(drop=True)
+    types = {"price": "price", "price_l1": "price"}
+    for name in ("price_gap_l1", "price_investment_l1"):
+      with self.subTest(name=name):
+        orch = self._orchestrator(["price", "price_l1"], types)
+        with self.assertRaises(ValueError) as ctx:
+          self._apply(orch, df.assign(**{name: 1.0}))
+        message = str(ctx.exception)
+        self.assertIn(f"column(s) ['{name}']", message)
+        self.assertIn("price treatment(s) ['price', 'price_l1']", message)
+    # Without the lag among the treatments nothing creates these columns: the
+    # caller's column is kept as it is.
+    orch = self._orchestrator(["price"], {"price": "price"})
+    out, _ = self._apply(orch, df.assign(price_gap_l1=1.0))
+    self.assertEqual(set(out["price_gap_l1"]), {1.0})
+
+  def test_reserved_names_apply_whatever_the_benchmark(self):
+    """``as_is`` reserves the names too; other treatment types reserve none."""
+    df = self.df.copy()
+    df["gap"] = df.groupby(["item", "geo"])["price"].transform("max") - df[
+        "price"
+    ]
+    # The caller's cost column under the name of the column the step creates
+    # from it (the cost with 0 where the gap is <= 0).
+    df["gap_investment"] = 7.0
+    orch = self._orchestrator(
+        ["gap"],
+        {"gap": {"type": "price", "benchmark": "as_is"}},
+        treatment_spend_cols={"gap": "gap_investment"},
+    )
+    with self.assertRaisesRegex(
+        ValueError, r"column\(s\) \['gap_investment'\]"
+    ):
+      self._apply(orch, df)
+    # `as_is` creates neither a gap nor a benchmark column, but the names are
+    # reserved all the same: the check does not depend on the benchmark.
+    orch = self._orchestrator(
+        ["gap"], {"gap": {"type": "price", "benchmark": "as_is"}}
+    )
+    reserved_benchmark = df.drop(columns="gap_investment").assign(
+        gap_benchmark=1.0
+    )
+    with self.assertRaisesRegex(ValueError, r"column\(s\) \['gap_benchmark'\]"):
+      self._apply(orch, reserved_benchmark)
+    # A treatment that is not a `price` reserves nothing.
+    orch = self._orchestrator(["tv"], {"tv": "spend"})
+    out, _ = self._apply(orch, self.df.assign(tv=1.0, tv_gap=2.0))
+    self.assertEqual(set(out["tv_gap"]), {2.0})
 
   def test_restore_before_a_second_run(self):
     """The renames are undone before a second run and redone identically."""

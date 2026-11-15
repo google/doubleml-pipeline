@@ -174,6 +174,13 @@ _SCALER_COL_LISTS = (
     "median_normalize_cols",
 )
 
+# The documentation of the columns the pipeline creates for a `price`
+# treatment; quoted by the error raised when the input already has one.
+_PRICE_DOC_URL = (
+    "https://github.com/google/doubleml-pipeline/blob/main/docs/advanced.md"
+    "#what-the-pipeline-does-with-a-price-treatment"
+)
+
 
 def rep_df_columns(d_col: str, gt_col: Optional[str]) -> List[str]:
   """The ``df_1a`` columns kept for repetitions >= 1."""
@@ -968,7 +975,11 @@ class CausalWorkflowOrchestrator:
         " be ignored silently."
     )
 
-  def _validate_columns(self, df: pd.DataFrame) -> None:
+  def _validate_columns(
+      self,
+      df: pd.DataFrame,
+      scaler: Optional[scalers.CausalDataScaler] = None,
+  ) -> None:
     """Checks that every user-specified column exists in ``df``.
 
     Runs once at the start of ``run_full_pipeline`` so that a misspelled
@@ -985,8 +996,15 @@ class CausalWorkflowOrchestrator:
     True.  ``treatment_spend_cols`` is left to ``_validate_treatments``,
     which already reports it.
 
+    The column lists of ``scaler`` are checked as well (reported as
+    ``scaler.<list>``): they may only name columns of the input ``df``.  The
+    columns the pipeline creates for a ``price`` treatment are added to the
+    lists by ``_apply_price_treatments``, never by the caller.
+
     Args:
       df: The input DataFrame of ``run_full_pipeline``.
+      scaler: The scaler of ``run_full_pipeline``; its column lists are not
+        checked when it is None.
 
     Raises:
       ValueError: If any specified column is not in ``df.columns``.
@@ -1023,6 +1041,10 @@ class CausalWorkflowOrchestrator:
       required["ground_truth_effect_column"] = list(
           dict.fromkeys(self.ground_truth_effect_column)
       )
+    for list_name in _SCALER_COL_LISTS:
+      cols = getattr(scaler, list_name, None)
+      if cols:
+        required[f"scaler.{list_name}"] = list(dict.fromkeys(cols))
 
     available = [str(c) for c in df.columns]
     problems: List[str] = []
@@ -1382,6 +1404,50 @@ class CausalWorkflowOrchestrator:
     table.to_csv(path, index=False)
     print(f"  ├─ '{base}': benchmark table saved: {path}", flush=True)
 
+  def _check_price_output_names(
+      self, df: pd.DataFrame, bases: Dict[str, List[str]]
+  ) -> None:
+    """Raises if `df` has a column named like one the price step creates.
+
+    For a price column `<d>` the step writes `<d>_gap`, `<d>_benchmark` and
+    `<d>_investment` (`<d>_gap_l<n>` and `<d>_investment_l<n>` for a lag
+    treatment `<d>_l<n>`) into its copy of the frame; a column of the input
+    with one of these names would be overwritten there without notice.  The
+    names are reserved for every `price` treatment whatever its benchmark
+    (`as_is` creates the investment column at most), so that the outcome of
+    the check does not depend on the data.
+
+    Args:
+      df: The input DataFrame.
+      bases: Price column -> the `price` treatments that are it or a lag of it.
+
+    Raises:
+      ValueError: If `df` has a column with a reserved name.
+    """
+    reserved: Dict[str, str] = {}
+    for base, members in bases.items():
+      lags = {price_benchmark.split_lag(d_col)[1] for d_col in members}
+      for lag in sorted(lags | {0}):
+        for name in price_benchmark.output_names(base, lag).values():
+          reserved.setdefault(name, base)
+    taken = [name for name in reserved if name in df.columns]
+    if not taken:
+      return
+    treatments: List[str] = []
+    for base in dict.fromkeys(reserved[name] for name in taken):
+      treatments.extend(bases[base])
+    raise ValueError(
+        f"The input DataFrame has column(s) {taken} whose name(s) are"
+        " reserved for the columns the pipeline itself creates for the price"
+        f" treatment(s) {treatments}. For a price treatment '<d>' these are"
+        " '<d>_gap' (benchmark - price, the treatment that is estimated),"
+        " '<d>_benchmark' (the benchmark price) and '<d>_investment' (the"
+        " price investment), plus '<d>_gap_l<n>' and '<d>_investment_l<n>'"
+        " for a lag '<d>_l<n>'. Please use different names for these"
+        " column(s) of the input DataFrame (rename or drop them).\nHow a price"
+        f" treatment is processed: {_PRICE_DOC_URL}"
+    )
+
   def _apply_price_treatments(
       self, df: pd.DataFrame, scaler: scalers.CausalDataScaler
   ) -> pd.DataFrame:
@@ -1413,18 +1479,20 @@ class CausalWorkflowOrchestrator:
 
     Args:
       df: The input DataFrame (after `_validate_columns`).
-      scaler: The scaler of the run (its column lists are extended in place).
+      scaler: The run's own copy of the caller's scaler (its column lists are
+        extended in place).
 
     Returns:
       A copy of `df` with the new columns, or `df` itself when there is no
       `price` treatment.
 
     Raises:
-      ValueError: For a benchmark keyword used as a column name, a lagged
-        price treatment without its base column or without `date_col`,
-        conflicting benchmarks among the lags of one column, a missing
-        benchmark column, or a price `<= 0` when the investment is computed
-        automatically.
+      ValueError: For a benchmark keyword used as a column name, a column of
+        `df` named like a column this step creates (see
+        `_check_price_output_names`), a lagged price treatment without its
+        base column or without `date_col`, conflicting benchmarks among the
+        lags of one column, a missing benchmark column, or a price `<= 0` when
+        the investment is computed automatically.
     """
     self._price_benchmark_records = {}
     price_cols = [
@@ -1441,6 +1509,11 @@ class CausalWorkflowOrchestrator:
           " ('as_is', 'rolling_max', 'q_<k>') and could not be named as a"
           " benchmark column; please rename them."
       )
+    bases: Dict[str, List[str]] = {}
+    for d_col in price_cols:
+      base, _ = price_benchmark.split_lag(d_col)
+      bases.setdefault(base, []).append(d_col)
+    self._check_price_output_names(df, bases)
     self._price_config_backup = {
         "d_cols": list(self.d_cols),
         "treatment_types": dict(self.treatment_types),
@@ -1463,11 +1536,6 @@ class CausalWorkflowOrchestrator:
       )
       print(f"  ├─ [Warning] {message}", flush=True)
       warnings.warn(message, UserWarning)
-
-    bases: Dict[str, List[str]] = {}
-    for d_col in price_cols:
-      base, _ = price_benchmark.split_lag(d_col)
-      bases.setdefault(base, []).append(d_col)
 
     renames: Dict[str, str] = {}
     spend_updates: Dict[str, str] = {}
@@ -4142,7 +4210,11 @@ class CausalWorkflowOrchestrator:
     # A previous run may have renamed the `price` treatments to their gap
     # columns; start from the configuration the caller gave.
     self._restore_price_config()
-    self._validate_columns(df)
+    self._validate_columns(df, scaler)
+    # The run works on its own copy of the scaler (the price step below adds
+    # the gap and benchmark columns to its lists): the caller's scaler is
+    # never modified.
+    scaler = copy.deepcopy(scaler)
     # `price` treatments: benchmark price, gap (the treatment from here on)
     # and price investment.  `df` is not modified; the returned frame carries
     # the new columns and `d_cols` / `treatment_types` /

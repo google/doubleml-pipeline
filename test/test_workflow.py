@@ -236,6 +236,40 @@ class WorkflowTest(unittest.TestCase):
     self.assertIn("opt_other_cost_variables: 'cost_typo'", message)
     self.assertNotIn("'sales'", message.split("\nAvailable columns")[0])
 
+  def test_validate_columns_reports_scaler_columns_missing_from_df(self):
+    """A scaler list may only name columns of the input DataFrame."""
+    scaler = scalers.CausalDataScaler(
+        standardize_cols=["X1", "sale"], median_normalize_cols=["T1_gap"]
+    )
+    with self.assertRaises(ValueError) as ctx:
+      self.orchestrator._validate_columns(self.df, scaler)
+    message = str(ctx.exception)
+    self.assertIn(
+        "scaler.standardize_cols: 'sale' (did you mean 'sales'?)", message
+    )
+    self.assertIn("scaler.median_normalize_cols: 'T1_gap'", message)
+    # Present columns are not reported as missing.
+    self.assertNotIn("'X1'", message.split("\nAvailable columns")[0])
+
+  def test_validate_columns_accepts_scaler_columns_of_the_df(self):
+    """A scaler that names input columns only passes the check."""
+    scaler = scalers.CausalDataScaler(
+        standardize_cols=["X1", "X2"], median_normalize_cols=["T1", "sales"]
+    )
+    self.orchestrator._validate_columns(self.df, scaler)
+
+  def test_run_full_pipeline_stops_on_scaler_column_missing_from_df(self):
+    """A scaler column that is not in df stops the run before any work."""
+    scaler = scalers.CausalDataScaler(standardize_cols=["X1", "X_bad"])
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+      with self.assertRaisesRegex(
+          ValueError, r"scaler\.standardize_cols: 'X_bad'"
+      ):
+        self.orchestrator.run_full_pipeline(df=self.df, scaler=scaler)
+    self.assertNotIn("Starting DML Pipeline", buffer.getvalue())
+    self.assertNotIn("Phase 0", buffer.getvalue())
+
   def test_run_full_pipeline_stops_on_missing_column_before_any_work(self):
     """run_full_pipeline raises before Phase 0, the scaler fit or any output."""
     self.orchestrator.x_cols_list = [["X1", "X_bad"]]
@@ -1465,7 +1499,6 @@ class Phase1ScalerAndThetaTest(unittest.TestCase):
       }
       scaler = scalers.CausalDataScaler(
           population_median_normalize_cols=["spend_sat", "spend_lin", "sales"],
-          median_normalize_cols=["spend_sat"],
           standardize_cols=["X1"],
           population_col="population",
       )
@@ -1476,14 +1509,25 @@ class Phase1ScalerAndThetaTest(unittest.TestCase):
           phase1_scaler.population_median_normalize_cols,
           ["spend_lin", "sales"],
       )
-      self.assertEqual(phase1_scaler.median_normalize_cols, [])
       self.assertEqual(phase1_scaler.standardize_cols, ["X1"])
       # Caller's original scaler lists remain untouched.
       self.assertEqual(
           scaler.population_median_normalize_cols,
           ["spend_sat", "spend_lin", "sales"],
       )
-      self.assertEqual(scaler.median_normalize_cols, ["spend_sat"])
+
+      # The other divisive list a saturated treatment may be in is filtered
+      # the same way.
+      median_scaler = scalers.CausalDataScaler(
+          median_normalize_cols=["spend_sat", "spend_lin"]
+      )
+      self.assertEqual(
+          orch._scaler_for_phase1(median_scaler).median_normalize_cols,
+          ["spend_lin"],
+      )
+      self.assertEqual(
+          median_scaler.median_normalize_cols, ["spend_sat", "spend_lin"]
+      )
 
   def test_run_full_pipeline_keeps_fbar_unscaled_when_population_normalized(
       self,

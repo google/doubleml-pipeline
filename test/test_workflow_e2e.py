@@ -315,8 +315,18 @@ class PriceTreatmentEndToEndTest(unittest.TestCase):
           sales_col="sales",
           optimize=True,
       )
+      # The scaler lists Phases 1-3 are fitted with.
+      phase1_lists = []
+      prepare_run_inputs = workflow.runner.prepare_run_inputs
+
+      def spy_prepare(df_fit, run_scaler, *args):
+        phase1_lists.append(list(run_scaler.standardize_cols))
+        return prepare_run_inputs(df_fit, run_scaler, *args)
+
       with mock.patch.object(
           flaml_dml.FlamlRegressorDoubleML, "fit", helpers.deterministic_fit
+      ), mock.patch.object(
+          workflow.runner, "prepare_run_inputs", side_effect=spy_prepare
       ), warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=1)
@@ -325,11 +335,13 @@ class PriceTreatmentEndToEndTest(unittest.TestCase):
           any("gives no benchmark" in m and "q_100" in m for m in messages),
           messages,
       )
-      # The caller's frame and scaler lists.
+      # The caller's frame and scaler are untouched: the gap and benchmark
+      # columns joined the list of the run's own copy of the scaler.
       self.assertNotIn("price_gap", df.columns)
+      self.assertEqual(scaler.standardize_cols, ["price", "X1", "X2", "sales"])
       self.assertEqual(
-          scaler.standardize_cols,
-          ["price", "X1", "X2", "sales", "price_gap", "price_benchmark"],
+          phase1_lists,
+          [["price", "X1", "X2", "sales", "price_gap", "price_benchmark"]],
       )
       # The run-time configuration.
       self.assertEqual(orch.d_cols, ["price_gap"])

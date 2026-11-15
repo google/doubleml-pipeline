@@ -239,6 +239,73 @@ class ScalersTest(unittest.TestCase):
     self.assertEqual(list(df_scaled.columns), ["value1"])
     self.assertAlmostEqual(df_scaled["value1"].mean(), 0.0, places=5)
 
+  def test_column_in_two_lists_is_rejected_at_construction(self):
+    """A column under two strategies would be scaled twice and undone once."""
+    with self.assertRaisesRegex(
+        ValueError,
+        r"'value1' \(population_median_normalize_cols, median_normalize_cols\)",
+    ):
+      scalers.CausalDataScaler(
+          median_normalize_cols=["value1"],
+          population_median_normalize_cols=["value1", "value2"],
+          population_col="pop",
+      )
+
+  def test_column_repeated_in_one_list_is_rejected_at_construction(self):
+    """``transform`` loops over the list, so a repeated name scales twice."""
+    with self.assertRaisesRegex(
+        ValueError, r"'value1' \(standardize_cols, standardize_cols\)"
+    ):
+      scalers.CausalDataScaler(standardize_cols=["value1", "value2", "value1"])
+
+  def test_repeated_column_error_names_only_the_repeated_columns(self):
+    """Every repeated column is named with its lists; the others are not."""
+    with self.assertRaises(ValueError) as ctx:
+      scalers.CausalDataScaler(
+          standardize_cols=["a", "b"],
+          min_max_cols=["a"],
+          median_normalize_cols=["c", "c"],
+          population_median_normalize_cols=["d"],
+      )
+    message = str(ctx.exception)
+    self.assertIn("'a' (standardize_cols, min_max_cols)", message)
+    self.assertIn(
+        "'c' (median_normalize_cols, median_normalize_cols)", message
+    )
+    self.assertNotIn("'b'", message)
+    self.assertNotIn("'d'", message)
+
+  def test_fit_rejects_a_column_added_to_a_second_list(self):
+    """The lists are mutable (the price step extends them), so fit re-checks."""
+    scaler = scalers.CausalDataScaler(
+        median_normalize_cols=["value1"], population_col="pop"
+    )
+    scaler.population_median_normalize_cols.append("value1")
+    df = pd.DataFrame({"value1": [10.0, 20.0, 30.0], "pop": [1.0, 2.0, 4.0]})
+    with self.assertRaisesRegex(ValueError, "listed more than once"):
+      scaler.fit(df)
+    # Nothing was fitted.
+    self.assertEqual(scaler.median_params_, {})
+    self.assertEqual(scaler.pop_median_params_, {})
+
+  def test_transform_rejects_a_list_edited_after_fit(self):
+    """A column listed twice after ``fit`` is caught before it is scaled.
+
+    ``fit`` keeps the parameters of earlier fits, so a column moved from one
+    list to another and then listed under both would be scaled by both.
+    """
+    df = pd.DataFrame({"value1": [10.0, 20.0, 30.0], "pop": [1.0, 2.0, 4.0]})
+    scaler = scalers.CausalDataScaler(
+        median_normalize_cols=["value1"], population_col="pop"
+    )
+    scaler.fit(df)
+    scaler.median_normalize_cols = []
+    scaler.population_median_normalize_cols = ["value1"]
+    scaler.fit(df)
+    scaler.median_normalize_cols = ["value1"]
+    with self.assertRaisesRegex(ValueError, "listed more than once"):
+      scaler.transform(df)
+
 
 if __name__ == "__main__":
   unittest.main()

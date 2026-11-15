@@ -76,12 +76,16 @@ treatment_types = {
 | `"q_k"`, `k` an integer in `1…100` | The `k`-th percentile of the prices of the group, taken as the **smallest observed price at or above the percentile** (`np.quantile(..., method="higher")`), so `b` is always a price that occurred and every group has at least one row with `D = 0`. `q_100` is the group maximum; it is the only quantile with `D >= 0` on every row. |
 | `"rolling_max"` with `"window": "<n>W"` or `"<n>D"` | `b_{g,t} = max{ p_{g,s} : t − W < s <= t, (g, s) observed }` — the maximum price of the group over the calendar window of length `W` (`n` weeks or days) **ending at and including the row's own date**, so `D >= 0` always. The first observed date of a group has `D = 0` (its window holds that date only); missing dates are simply absent from the window. Requires `date_col`. |
 | a number | A constant benchmark price (must be `> 0`). |
-| any other string | The name of a column holding the benchmark price (a list price, for example). It must exist in `df`; a column named like one of the keywords above (`as_is`, `rolling_max`, `q_<k>`) is rejected. |
+| any other string | The name of a column holding the benchmark price (a list price, for example). It must exist in `df`; a column named like one of the keywords above (`as_is`, `rolling_max`, `q_<k>`) or like a column the pipeline creates (`<d>_benchmark`, see below) is rejected. |
 
 ### What the pipeline does with a price treatment
 
 At the start of `run_full_pipeline`, right after the column check and before
-anything else:
+anything else, the pipeline creates the columns below. Their names —
+`<d>_gap`, `<d>_benchmark`, `<d>_investment`, and `<d>_gap_l<n>` /
+`<d>_investment_l<n>` for a lag — are reserved for every `"price"` treatment
+`<d>`: a `df` that already has a column with one of these names raises
+`ValueError`; rename or drop that column.
 
 1.  `<d>_benchmark` (`b`) and `<d>_gap` (`D`) are added to a copy of `df` (the
     caller's frame is not modified) and the treatment is **renamed** to
@@ -118,8 +122,11 @@ anything else:
     (e.g. `{"price": {...}, "price_l1": "price"}`); a lag without one whose
     base column is a `price` treatment raises `ValueError` at construction.
 5.  If the price column is listed in one of the scaler's column lists
-    (`standardize_cols`, …), `<d>_gap` and `<d>_benchmark` are added to the
-    same list, so the treatment is scaled the way the caller intended.
+    (`standardize_cols`, …), `<d>_gap` and `<d>_benchmark` are scaled the same
+    way: the run adds them to that list in its own copy of the scaler (the
+    caller's scaler is not modified). List the price column itself: a scaler
+    list may only name columns of `df`, so naming `<d>_gap` there raises
+    `ValueError`.
 6.  The benchmark values are written to `price_benchmark/<d>_benchmark.csv`
     (one row per group, or per group and date for `rolling_max` and column
     benchmarks) and `metadata.json["price_benchmarks"]` records, per gap

@@ -653,7 +653,9 @@ disk can execute arbitrary code).
 -   `df` *(pd.DataFrame)*: The raw input dataset. Its index must be **unique**
     (any order or dtype is fine): rows are matched by index label across
     phases. Example: `pd.read_csv('data.csv')`.
--   `scaler` *(CausalDataScaler)*: Initialized scaler object. Example: `CausalDataScaler(standardize_cols=['spend'])`.
+-   `scaler` *(CausalDataScaler)*: Initialized scaler object. Its column lists
+    may only name columns of `df`. The run works on a copy: the object passed
+    is not modified. Example: `CausalDataScaler(standardize_cols=['spend'])`.
 -   `top_n` *(int, default=5)*: Number of top models to select for the final
     ensemble. Example: `3`.
 -   `n_reps` *(int, default=20)*: Number of repetitions for the robust ensemble
@@ -671,9 +673,14 @@ disk can execute arbitrary code).
 -   `ValueError`: If a user-specified column (`y_col`, `d_cols`,
     `x_cols_list`, `covariates_for_cate_list`, `date_col`, `geo_col`,
     `item_col`, `geo_name_col`, `item_name_col`, `sales_col`,
-    `opt_other_cost_variables`, and `ground_truth_effect_column` when
-    `ground_truth_existence=True`) is missing from `df`; one message names
-    every offending parameter, with did-you-mean hints.
+    `opt_other_cost_variables`, the column lists of `scaler`, and
+    `ground_truth_effect_column` when `ground_truth_existence=True`) is
+    missing from `df`; one message names every offending parameter, with
+    did-you-mean hints.
+-   `ValueError`: With a `'price'` treatment `<d>`, if `df` already has a
+    column named like one the pipeline creates (`<d>_gap`, `<d>_benchmark`,
+    `<d>_investment`; see [What the pipeline does with a price
+    treatment](advanced.md#what-the-pipeline-does-with-a-price-treatment)).
 -   `ValueError`: For an invalid `treatment_types` value, a `'percentage'`
     treatment with values outside `[0, 1]` or without a valid `sales_col`, a
     `treatment_spend_cols` column missing from `df`, or an
@@ -789,7 +796,11 @@ transformation to ensure accurate business impact metrics (KPI, ROI).
 
 Initializes specific scaling strategies. Issues a `UserWarning` if
 `population_col` is erroneously passed into `population_median_normalize_cols`
-to prevent singularity bugs. **Parameters:**
+to prevent singularity bugs. Raises a `ValueError` if a column is listed more
+than once across the five lists (in two lists, or twice in one): `transform`
+would scale it once per listing while `inverse_transform_column` undoes a
+single scaling. The lists can be edited after construction, so `fit` and
+`transform` repeat the check. **Parameters:**
 
 -   `standardize_cols` *(Optional[List[str]])*: Columns to apply standard
     scaling. Example: `['temperature']`.
@@ -823,7 +834,8 @@ Computes the scaling parameters from `x` and returns `self`.
 
 **Raises:**
 
--   `ValueError`: If `population_col` is needed (a population-based list is
+-   `ValueError`: If a column is listed more than once across the scaling
+    lists, if `population_col` is needed (a population-based list is
     non-empty) but absent from `x`, or if any column named in one of the
     scaling lists is not in `x.columns`.
 
@@ -832,7 +844,8 @@ Computes the scaling parameters from `x` and returns `self`.
 Returns a scaled **copy** of `x` using the fitted parameters (the helper
 column `_raw_population_` is added during the transform and dropped before
 the frame is returned). Min-max scaling of a constant column yields `0.0`.
-Raises `ValueError` if `population_col` is needed but absent from `x`.
+Raises `ValueError` if a column is listed more than once across the scaling
+lists or if `population_col` is needed but absent from `x`.
 
 #### `fit_transform(self, x: pd.DataFrame, y: Optional[Any] = None) -> pd.DataFrame`
 

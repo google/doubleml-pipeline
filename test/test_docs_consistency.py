@@ -31,6 +31,8 @@ pages against drifting away from the package:
   show the real defaults;
 * relative links and ``#anchors`` between the Markdown files resolve;
 * the error and warning messages quoted in ``docs/faq.md`` exist in the source;
+* the documentation URL quoted by the reserved-name error of a ``price``
+  treatment points at a file and heading that exist;
 * obsolete wording (``Phase 5``, ``report.html`` as the report name) does not
   come back;
 * the example notebooks linked from the README open with a title and an
@@ -699,6 +701,14 @@ class CrossReferenceTest(unittest.TestCase):
             f"{fragment!r} not found in {module_name}",
         )
         self.assertIn(fragment.split(" (")[0][:40], _read(_DOCS / "faq.md"))
+
+  def test_price_column_error_links_an_existing_heading(self):
+    """The documentation URL quoted by the reserved-name error resolves."""
+    url = workflow._PRICE_DOC_URL  # pylint: disable=protected-access
+    self.assertTrue(url.startswith(_GITHUB_BLOB), url)
+    path, _, anchor = url[len(_GITHUB_BLOB) :].partition("#")
+    self.assertTrue((_ROOT / path).is_file(), f"{path} does not exist")
+    self.assertIn(anchor, _anchors(_ROOT / path))
 
   def test_report_file_name_example(self):
     name = html_extraction._report_filename(  # pylint: disable=protected-access
