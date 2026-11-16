@@ -14,10 +14,13 @@
 
 """Tests for the ``preprocessing`` package: ``features`` and ``scalers``."""
 
+import re
 import unittest
 
 from doubleml_pipeline.preprocessing import features
 from doubleml_pipeline.preprocessing import scalers
+from doubleml_pipeline.test import helpers
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -305,6 +308,333 @@ class ScalersTest(unittest.TestCase):
     scaler.median_normalize_cols = ["value1"]
     with self.assertRaisesRegex(ValueError, "listed more than once"):
       scaler.transform(df)
+
+
+# ---------------------------------------------------------------------------
+# The operations of the scaler, each for every scaling strategy and on two
+# columns: `spend` has a row with 0 (the two median strategies skip it) and
+# `sales` has none, with a minimum other than 0 (so that a forgotten shift
+# shows).  Expected values are the hand formulas of test/helpers.py.
+# ---------------------------------------------------------------------------
+
+_COLUMNS = ("spend", "sales")
+
+
+def _fit_frame() -> pd.DataFrame:
+  """The rows the scaler is fitted on; the population differs by row."""
+  return pd.DataFrame({
+      "spend": [0.0, 200.0, 600.0, 900.0, 3000.0, 9000.0],
+      "sales": [700.0, 400.0, 1500.0, 1200.0, 5200.0, 8100.0],
+      "pop": [100.0, 100.0, 200.0, 150.0, 500.0, 1000.0],
+  })
+
+
+def _other_frame() -> pd.DataFrame:
+  """Rows that take no part in the fit: other values, other population."""
+  return pd.DataFrame(
+      {
+          "spend": [1500.0, 0.0, 2500.0],
+          "sales": [900.0, 3000.0, 6000.0],
+          "pop": [500.0, 250.0, 400.0],
+      },
+      index=[100, 101, 102],
+  )
+
+
+def _second_fit_frame() -> pd.DataFrame:
+  """The rows of a second fit, far from the values of `_fit_frame`."""
+  return pd.DataFrame({
+      "spend": [0.0, 30.0, 50.0, 80.0, 110.0, 140.0],
+      "sales": [60.0, 20.0, 90.0, 75.0, 130.0, 45.0],
+      "pop": [10.0, 20.0, 10.0, 40.0, 20.0, 50.0],
+  })
+
+
+def _scaler_for(strategy: str, column: str) -> scalers.CausalDataScaler:
+  """A scaler with `column` as the only column, listed under `strategy`."""
+  return scalers.CausalDataScaler(
+      population_col="pop", **{f"{strategy}_cols": [column]}
+  )
+
+
+def _by_hand(strategy: str, fitted: pd.DataFrame, rows: pd.DataFrame, column):
+  """`rows[column]` scaled by hand with the numbers of a fit on `fitted`."""
+  numbers = helpers.scaling_numbers(strategy, fitted[column], fitted["pop"])
+  return helpers.scale_by_hand(strategy, numbers, rows[column], rows["pop"])
+
+
+def _assert_close(actual, expected):
+  np.testing.assert_allclose(
+      np.asarray(actual, dtype=float),
+      np.asarray(expected, dtype=float),
+      rtol=1e-9,
+      atol=1e-9,
+  )
+
+
+@pytest.mark.parametrize(
+    ("strategy", "expected"),
+    [
+        # mean 200, standard deviation 100
+        ("standardize", [-1.0, 1.0]),
+        # min 100, max 300
+        ("min_max", [0.0, 1.0]),
+        # median 200
+        ("median_normalize", [0.5, 1.5]),
+        # per head 4 and 6: median 5
+        ("population_median_normalize", [0.8, 1.2]),
+        # per head 4 and 6: mean 5, standard deviation 1
+        ("population_standardize", [-1.0, 1.0]),
+    ],
+)
+def test_transform_of_two_rows_small_enough_to_check_by_eye(strategy, expected):
+  """The formula of every strategy on numbers that need no calculator."""
+  df = pd.DataFrame({"value": [100.0, 300.0], "pop": [25.0, 50.0]})
+  scaler = _scaler_for(strategy, "value")
+
+  scaled = scaler.fit_transform(df)
+
+  _assert_close(scaled["value"], expected)
+
+
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
+def test_transform_matches_the_hand_formula(strategy, column):
+  df = _fit_frame()
+  scaler = _scaler_for(strategy, column)
+
+  scaled = scaler.fit_transform(df)
+
+  _assert_close(scaled[column], _by_hand(strategy, df, df, column))
+
+
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
+def test_inverse_restores_the_fitted_rows(strategy, column):
+  df = _fit_frame()
+  scaler = _scaler_for(strategy, column)
+  scaled = scaler.fit_transform(df)
+
+  restored = scaler.inverse_transform_column(scaled, column)
+
+  _assert_close(restored, df[column])
+
+
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
+def test_inverse_of_a_difference_is_the_difference_of_the_inverses(
+    strategy, column
+):
+  """`is_difference=True` restores the difference of two scaled values."""
+  df = _fit_frame()
+  scaler = _scaler_for(strategy, column)
+  scaled = scaler.fit_transform(df)
+  # Two scaled quantities of the column and their difference, like the
+  # prediction with and without the treatment (the incremental KPI).
+  scaled["a"] = scaled[column] + 0.25
+  scaled["b"] = 0.5 * scaled[column]
+  scaled["a_minus_b"] = scaled["a"] - scaled["b"]
+
+  difference = scaler.inverse_transform_column(
+      scaled, "a_minus_b", param_source_col=column, is_difference=True
+  )
+
+  restored_a = scaler.inverse_transform_column(
+      scaled, "a", param_source_col=column
+  )
+  restored_b = scaler.inverse_transform_column(
+      scaled, "b", param_source_col=column
+  )
+  _assert_close(difference, restored_a - restored_b)
+  numbers = helpers.scaling_numbers(strategy, df[column], df["pop"])
+  _assert_close(
+      difference,
+      helpers.unscale_by_hand(
+          strategy, numbers, scaled["a_minus_b"], df["pop"], is_difference=True
+      ),
+  )
+
+
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
+def test_transform_of_rows_not_used_in_the_fit(strategy, column):
+  fitted, other = _fit_frame(), _other_frame()
+  scaler = _scaler_for(strategy, column).fit(fitted)
+
+  scaled = scaler.transform(other)
+
+  _assert_close(scaled[column], _by_hand(strategy, fitted, other, column))
+
+
+# The strategies that restore a value without the population of its row.
+_STRATEGIES_WITHOUT_POPULATION = (
+    "standardize",
+    "min_max",
+    "median_normalize",
+)
+
+
+@pytest.mark.parametrize(
+    "index",
+    [
+        pytest.param([100, 101, 102], id="new_labels"),
+        pytest.param([0, 1, 2], id="labels_of_fitted_rows"),
+    ],
+)
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", _STRATEGIES_WITHOUT_POPULATION)
+def test_inverse_restores_rows_not_used_in_the_fit(strategy, column, index):
+  """Rows that took no part in the fit are restored with its numbers.
+
+  The pipeline scales and restores the rows it only scores (Phase 0's `D_sel`)
+  with the numbers of the rows it fits on (`D_inf`).  The two population
+  strategies are not part of this test: `inverse_transform_column` multiplies
+  by the population that `fit` remembered, looked up by index label, so a
+  caller adds the population of the other rows to `raw_population_` before it
+  restores them.  The pipeline does; test_scaling_pipeline.py checks the
+  result.
+  """
+  fitted = _fit_frame()
+  other = _other_frame().set_axis(index, axis="index")
+  scaler = _scaler_for(strategy, column).fit(fitted)
+  scaled = scaler.transform(other)
+
+  restored = scaler.inverse_transform_column(scaled, column)
+
+  _assert_close(restored, other[column])
+
+
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.POPULATION_STRATEGIES)
+def test_population_strategies_stop_without_the_population_column(
+    strategy, column
+):
+  """`fit`, `transform` and `inverse_transform_column` all need the column."""
+  df = _fit_frame()
+  without_population = df.drop(columns="pop")
+  message = re.escape(
+      "Specified population column 'pop' not found in dataframe."
+  )
+
+  with pytest.raises(ValueError, match=message):
+    _scaler_for(strategy, column).fit(without_population)
+
+  scaler = _scaler_for(strategy, column).fit(df)
+  with pytest.raises(ValueError, match=message):
+    scaler.transform(without_population)
+  scaled_without_population = scaler.transform(df).drop(columns="pop")
+  with pytest.raises(ValueError, match=message):
+    scaler.inverse_transform_column(scaled_without_population, column)
+
+
+# A scaler that is fitted a second time must behave like a scaler fitted only
+# on the second frame.  The pipeline fits the scaler it is given at the start
+# of Phases 1-3; the first fit is one the caller ran beforehand.
+
+
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
+def test_second_fit_replaces_the_numbers_of_the_first(strategy, column):
+  first, second = _fit_frame(), _second_fit_frame()
+  scaler = _scaler_for(strategy, column).fit(first)
+
+  scaled = scaler.fit_transform(second)
+  restored = scaler.inverse_transform_column(scaled, column)
+
+  _assert_close(scaled[column], _by_hand(strategy, second, second, column))
+  _assert_close(restored, second[column])
+
+
+_KEPT_NUMBERS_REASON = (
+    "fit keeps the numbers of every earlier fit, and"
+    " inverse_transform_column uses the first numbers it finds for a column"
+    " (standardize, min_max, median_normalize, population_standardize,"
+    " population_median_normalize, in this order) whatever list the column"
+    " is in now."
+)
+# The order in which `inverse_transform_column` looks for the numbers of a
+# column.
+_INVERSE_LOOKUP_ORDER = (
+    "standardize",
+    "min_max",
+    "median_normalize",
+    "population_standardize",
+    "population_median_normalize",
+)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason=_KEPT_NUMBERS_REASON
+)
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
+def test_column_taken_off_its_list_before_the_second_fit_is_left_alone(
+    strategy, column
+):
+  """The pipeline takes a saturated treatment off the lists before its fit."""
+  first, second = _fit_frame(), _second_fit_frame()
+  scaler = _scaler_for(strategy, column).fit(first)
+  setattr(scaler, f"{strategy}_cols", [])
+
+  scaled = scaler.fit_transform(second)
+  restored = scaler.inverse_transform_column(scaled, column)
+
+  _assert_close(scaled[column], second[column])
+  _assert_close(restored, second[column])
+
+
+def _moved_column_cases():
+  """Every ordered pair of strategies; the pairs that currently fail."""
+  cases = []
+  for old in helpers.SCALING_STRATEGIES:
+    for new in helpers.SCALING_STRATEGIES:
+      if old == new:
+        continue
+      for column in _COLUMNS:
+        marks = ()
+        # The numbers of `old` are found before those of `new`.
+        if _INVERSE_LOOKUP_ORDER.index(old) < _INVERSE_LOOKUP_ORDER.index(new):
+          marks = pytest.mark.xfail(
+              strict=True, raises=AssertionError, reason=_KEPT_NUMBERS_REASON
+          )
+        cases.append(
+            pytest.param(
+                old, new, column, marks=marks, id=f"{old}-to-{new}-{column}"
+            )
+        )
+  return cases
+
+
+@pytest.mark.parametrize(("old", "new", "column"), _moved_column_cases())
+def test_column_moved_to_another_list_before_the_second_fit(old, new, column):
+  """The numbers of the former strategy are not used any more."""
+  first, second = _fit_frame(), _second_fit_frame()
+  scaler = _scaler_for(old, column).fit(first)
+  setattr(scaler, f"{old}_cols", [])
+  setattr(scaler, f"{new}_cols", [column])
+
+  scaled = scaler.fit_transform(second)
+  restored = scaler.inverse_transform_column(scaled, column)
+
+  _assert_close(scaled[column], _by_hand(new, second, second, column))
+  _assert_close(restored, second[column])
+
+
+def test_column_in_no_list_is_left_alone():
+  """`transform` and `inverse_transform_column` pass the column through."""
+  df = _fit_frame().assign(other=[5.0, -1.0, 0.0, 12.0, 7.0, 3.0])
+  scaler = scalers.CausalDataScaler(
+      standardize_cols=["spend"],
+      population_median_normalize_cols=["sales"],
+      population_col="pop",
+  )
+
+  scaled = scaler.fit_transform(df)
+  restored = scaler.inverse_transform_column(scaled, "other")
+
+  np.testing.assert_array_equal(scaled["other"], df["other"])
+  np.testing.assert_array_equal(scaled["pop"], df["pop"])
+  np.testing.assert_array_equal(restored, df["other"])
 
 
 if __name__ == "__main__":

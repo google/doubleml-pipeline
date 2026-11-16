@@ -27,14 +27,37 @@
   while everything else -- DoubleML cross-fitting, cluster keys, CATE basis,
   Phase 0, consolidation, Phase 4 -- runs as in production.
 * :func:`find`: path of a named output file below an output directory.
+* :func:`scaling_numbers` / :func:`scale_by_hand` / :func:`unscale_by_hand`:
+  the formulas of the scaling strategies of ``CausalDataScaler`` written out
+  by hand.  The scaler unit tests (test_preprocessing.py) and the checks of
+  the places where the pipeline calls the scaler (test_scaling_pipeline.py)
+  compare against them.
 """
 
 import os
 import types
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn import linear_model
+
+# The scaling strategies of ``CausalDataScaler``; the columns of a strategy
+# are listed in its constructor argument ``<strategy>_cols``.
+SCALING_STRATEGIES = (
+    "standardize",
+    "min_max",
+    "median_normalize",
+    "population_median_normalize",
+    "population_standardize",
+)
+# The strategies that scale the value per head of population.
+POPULATION_STRATEGIES = (
+    "population_median_normalize",
+    "population_standardize",
+)
+# A column that is in no list of the scaler.
+NO_SCALING = "none"
 
 
 def saturating_panel(
@@ -137,3 +160,78 @@ def find(out_dir: str, name: str) -> str:
     if name in files:
       return os.path.join(root, name)
   raise FileNotFoundError(name)
+
+
+def scaling_numbers(
+    strategy: str, values: pd.Series, population: pd.Series
+) -> tuple[float, float]:
+  """The ``(shift, scale)`` a fit of ``strategy`` on ``values`` remembers.
+
+  With ``base = values / population`` for the population strategies and
+  ``base = values`` otherwise, the scaled value is ``(base - shift) / scale``:
+
+  ===========================  ======  ====================================
+  strategy                     shift   scale
+  ===========================  ======  ====================================
+  standardize                  mean    standard deviation
+  min_max                      min     max - min
+  median_normalize             0       median of the non-zero values
+  population_median_normalize  0       median of the positive per-head values
+  population_standardize       mean    standard deviation
+  none                         0       1
+  ===========================  ======  ====================================
+
+  Args:
+    strategy: One of ``SCALING_STRATEGIES`` or ``NO_SCALING``.
+    values: The rows of the column the scaler is fitted on.
+    population: The population of those rows.
+
+  Returns:
+    The ``(shift, scale)`` pair.
+  """
+  if strategy == NO_SCALING:
+    return 0.0, 1.0
+  base = values / population if strategy in POPULATION_STRATEGIES else values
+  if strategy in ("standardize", "population_standardize"):
+    return float(base.mean()), float(base.std(ddof=0))
+  if strategy == "min_max":
+    return float(base.min()), float(base.max() - base.min())
+  if strategy == "median_normalize":
+    return 0.0, float(base[base != 0].median())
+  if strategy == "population_median_normalize":
+    return 0.0, float(base[base > 0].median())
+  raise ValueError(f"Unknown scaling strategy '{strategy}'.")
+
+
+def scale_by_hand(
+    strategy: str, numbers: tuple[float, float], values: Any, population: Any
+) -> Any:
+  """``values`` scaled once with the ``numbers`` of :func:`scaling_numbers`."""
+  shift, scale = numbers
+  base = values / population if strategy in POPULATION_STRATEGIES else values
+  return (base - shift) / scale
+
+
+def unscale_by_hand(
+    strategy: str,
+    numbers: tuple[float, float],
+    scaled: Any,
+    population: Any,
+    is_difference: bool = False,
+) -> Any:
+  """``scaled`` values restored once to the original unit.
+
+  Args:
+    strategy: One of ``SCALING_STRATEGIES`` or ``NO_SCALING``.
+    numbers: The ``(shift, scale)`` of :func:`scaling_numbers`.
+    scaled: Scaled values, or -- with ``is_difference`` -- the difference of
+      two scaled values.
+    population: The population of the rows of ``scaled``.
+    is_difference: The shift cancels in a difference and is not added back.
+
+  Returns:
+    The values (or the difference) in the original unit.
+  """
+  shift, scale = numbers
+  base = scaled * scale + (0.0 if is_difference else shift)
+  return base * population if strategy in POPULATION_STRATEGIES else base
