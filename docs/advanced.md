@@ -124,9 +124,11 @@ anything else, the pipeline creates the columns below. Their names —
 5.  If the price column is listed in one of the scaler's column lists
     (`standardize_cols`, …), `<d>_gap` and `<d>_benchmark` are scaled the same
     way: the run adds them to that list in its own copy of the scaler (the
-    caller's scaler is not modified). List the price column itself: a scaler
-    list may only name columns of `df`, so naming `<d>_gap` there raises
-    `ValueError`.
+    caller's scaler is not modified). A lag follows its own listing: if
+    `<d>_l<n>` is listed, `<d>_gap_l<n>` is added to that list; listing only
+    `<d>` leaves the gap of the lag unscaled. List the input columns
+    themselves: a scaler list may only name columns of `df`, so naming
+    `<d>_gap` there raises `ValueError`.
 6.  The benchmark values are written to `price_benchmark/<d>_benchmark.csv`
     (one row per group, or per group and date for `rolling_max` and column
     benchmarks) and `metadata.json["price_benchmarks"]` records, per gap

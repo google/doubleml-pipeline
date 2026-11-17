@@ -1385,15 +1385,18 @@ def _cluster_kfold(
 
 # Normalization bridge.  Only these scaler strategies are admissible
 # for a saturated treatment: both divide by a strictly positive quantity, so
-# they preserve `T >= 0` and `f(0) = 0`, and both pin `median(T_tilde) = 1`,
-# which is what makes the single fixed default grid meaningful.
+# they keep the sign of `T` and `T = 0` (hence `f(0) = 0`), and both pin
+# `median(T_tilde) = 1`, which is what makes the single fixed default grid
+# meaningful.
 _DIVISIVE_TREATMENT_SCALINGS = (
     "median_normalize",
     "population_median_normalize",
 )
-# These SHIFT the treatment, so roughly half the rows go negative and would be
-# silently clipped to 0 by `apply_saturation`; `f(0) = 0` (on which the Phase 4
-# theta recovery depends) would also be lost.
+# These SHIFT the treatment, so `T = 0` is no longer mapped to 0.  The curve
+# is anchored at `f(0) = 0` (`apply_saturation` evaluates a negative value as
+# `f(T) = -f(-T)`), so it would bend around the shifted origin instead of
+# around zero treatment, and `f(0) = 0` (on which the Phase 4 theta recovery
+# depends) would no longer line up with `T = 0`.
 _SHIFTING_TREATMENT_SCALINGS = (
     "standardize",
     "population_standardize",
@@ -1551,9 +1554,11 @@ def resolve_treatment_divisor(
       raise ValueError(
           f"Treatment '{d_col}' is configured for '{strategy}' normalization,"
           " which is incompatible with a saturation family: it shifts the"
-          " treatment, so a large share of the rows become negative and are"
-          " clipped to 0 by f(T;alpha), and f(0)=0 (which the Phase 4 theta"
-          " recovery relies on) no longer lines up with T=0. Move"
+          " treatment, so T=0 is no longer mapped to 0. The saturation curve"
+          " f(T;alpha) is anchored at f(0)=0 (a negative value is evaluated"
+          " as f(T) = -f(-T)), so it would bend around the shifted origin"
+          " instead of around zero treatment, and f(0)=0 (which the Phase 4"
+          " theta recovery relies on) no longer lines up with T=0. Move"
           f" '{d_col}' to median_normalize_cols or"
           " population_median_normalize_cols, or disable saturation"
           " (saturation.family = None)."
@@ -2395,11 +2400,11 @@ def select_alpha(
     _warn(
         messages,
         f"[Phase 0 / Stage B] Treatment '{d_col}' contains"
-        f" {int(np.count_nonzero(t_raw < 0.0))} negative value(s). All"
-        " saturation families are defined on T >= 0, so those rows are"
-        " clipped to 0 by `apply_saturation`. Use a normalization that"
-        " preserves non-negativity (median_normalize /"
-        " population_median_normalize) and check the raw data.",
+        f" {int(np.count_nonzero(t_raw < 0.0))} negative value(s). The"
+        " saturation families are defined on T >= 0; a negative value is"
+        " evaluated by the odd extension f(T) = -f(-T), which is meant for"
+        " a price above its benchmark (a negative price gap). For any other"
+        " treatment, check the raw data.",
     )
   if divisor is None:
     div_values = np.ones_like(t_raw)

@@ -14,6 +14,7 @@
 
 """Tests for the ``preprocessing`` package: ``features`` and ``scalers``."""
 
+import itertools
 import re
 import unittest
 
@@ -294,8 +295,8 @@ class ScalersTest(unittest.TestCase):
   def test_transform_rejects_a_list_edited_after_fit(self):
     """A column listed twice after ``fit`` is caught before it is scaled.
 
-    ``fit`` keeps the parameters of earlier fits, so a column moved from one
-    list to another and then listed under both would be scaled by both.
+    The lists can be edited after ``fit``, so ``transform`` repeats the check:
+    a column put back on a second list is rejected, whatever was fitted.
     """
     df = pd.DataFrame({"value1": [10.0, 20.0, 30.0], "pop": [1.0, 2.0, 4.0]})
     scaler = scalers.CausalDataScaler(
@@ -545,27 +546,6 @@ def test_second_fit_replaces_the_numbers_of_the_first(strategy, column):
   _assert_close(restored, second[column])
 
 
-_KEPT_NUMBERS_REASON = (
-    "fit keeps the numbers of every earlier fit, and"
-    " inverse_transform_column uses the first numbers it finds for a column"
-    " (standardize, min_max, median_normalize, population_standardize,"
-    " population_median_normalize, in this order) whatever list the column"
-    " is in now."
-)
-# The order in which `inverse_transform_column` looks for the numbers of a
-# column.
-_INVERSE_LOOKUP_ORDER = (
-    "standardize",
-    "min_max",
-    "median_normalize",
-    "population_standardize",
-    "population_median_normalize",
-)
-
-
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason=_KEPT_NUMBERS_REASON
-)
 @pytest.mark.parametrize("column", _COLUMNS)
 @pytest.mark.parametrize("strategy", helpers.SCALING_STRATEGIES)
 def test_column_taken_off_its_list_before_the_second_fit_is_left_alone(
@@ -583,29 +563,10 @@ def test_column_taken_off_its_list_before_the_second_fit_is_left_alone(
   _assert_close(restored, second[column])
 
 
-def _moved_column_cases():
-  """Every ordered pair of strategies; the pairs that currently fail."""
-  cases = []
-  for old in helpers.SCALING_STRATEGIES:
-    for new in helpers.SCALING_STRATEGIES:
-      if old == new:
-        continue
-      for column in _COLUMNS:
-        marks = ()
-        # The numbers of `old` are found before those of `new`.
-        if _INVERSE_LOOKUP_ORDER.index(old) < _INVERSE_LOOKUP_ORDER.index(new):
-          marks = pytest.mark.xfail(
-              strict=True, raises=AssertionError, reason=_KEPT_NUMBERS_REASON
-          )
-        cases.append(
-            pytest.param(
-                old, new, column, marks=marks, id=f"{old}-to-{new}-{column}"
-            )
-        )
-  return cases
-
-
-@pytest.mark.parametrize(("old", "new", "column"), _moved_column_cases())
+@pytest.mark.parametrize("column", _COLUMNS)
+@pytest.mark.parametrize(
+    ("old", "new"), list(itertools.permutations(helpers.SCALING_STRATEGIES, 2))
+)
 def test_column_moved_to_another_list_before_the_second_fit(old, new, column):
   """The numbers of the former strategy are not used any more."""
   first, second = _fit_frame(), _second_fit_frame()
@@ -618,6 +579,20 @@ def test_column_moved_to_another_list_before_the_second_fit(old, new, column):
 
   _assert_close(scaled[column], _by_hand(new, second, second, column))
   _assert_close(restored, second[column])
+
+
+@pytest.mark.parametrize("strategy", helpers.POPULATION_STRATEGIES)
+def test_second_fit_without_a_population_strategy_drops_the_population(
+    strategy,
+):
+  """`raw_population_` is the population of the last fit, or None."""
+  scaler = _scaler_for(strategy, "spend").fit(_fit_frame())
+  assert scaler.raw_population_ is not None
+  setattr(scaler, f"{strategy}_cols", [])
+
+  scaler.fit(_second_fit_frame())
+
+  assert scaler.raw_population_ is None
 
 
 def test_column_in_no_list_is_left_alone():

@@ -368,11 +368,12 @@ scaler = CausalDataScaler(
 ```
 
 > [!IMPORTANT]
-> **Saturation DML** (Phase 0) needs `f(0) = 0` and a non-negative treatment.
-> A saturated treatment must therefore be left unscaled or use a *divisive*
-> option — **A** or **C**. Listing it under `standardize_cols`,
-> `population_standardize_cols` or `min_max_cols` raises a `ValueError` at the
-> start of Phase 0. See [Saturation DML](saturation.md).
+> **Saturation DML** (Phase 0) needs `T = 0` to stay `0` after scaling: the
+> curve is anchored at `f(0) = 0`. A saturated treatment must therefore be
+> left unscaled or use a *divisive* option — **A** or **C**. Listing it under
+> `standardize_cols`, `population_standardize_cols` or `min_max_cols`, which
+> shift the treatment, raises a `ValueError` at the start of Phase 0. See
+> [Saturation DML](saturation.md).
 
 > [!TIP]
 > **Rule of thumb.** Amounts that grow with the population → **A**; rates and

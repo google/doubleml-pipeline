@@ -273,9 +273,10 @@ The keys in detail:
 > A saturated treatment must use a **divisive** normalization —
 > `median_normalize` or `population_median_normalize` — or none at all.
 > `standardize`, `population_standardize` and `min_max` all *shift* the
-> treatment, which sends roughly half the rows negative (silently clipped to
-> zero by `f`) and destroys `f(0) = 0`. Phase 0 rejects those combinations with
-> a `ValueError` before doing any ML work.
+> treatment, so `T = 0` is no longer mapped to `0` and `f(0) = 0` no longer
+> means "no treatment": a negative value is evaluated as `f(T) = −f(−T)` (not
+> clipped), so the curve would bend around the shifted origin. Phase 0 rejects
+> those combinations with a `ValueError` before doing any ML work.
 
 > [!NOTE]
 > `alpha` is estimated against the **normalized** treatment `T / c`, where

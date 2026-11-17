@@ -52,9 +52,6 @@ The runs vary
 
 Scaler settings the pipeline rejects are checked to stop with their error.
 
-A test marked ``xfail`` fails on the current code; ``strict=True`` fails the
-suite as soon as it passes, so that the mark is removed together with the fix.
-
 A run with a ``saturation`` block takes a few seconds (Phase 0, even without
 its chart, which these runs do not draw), the others well under a second, so
 the BUILD target is sharded.  The pytest shard plugin assigns the test cases
@@ -78,6 +75,7 @@ from doubleml_pipeline import workflow
 from doubleml_pipeline.evaluation import runner
 from doubleml_pipeline.evaluation import saturation_evaluation
 from doubleml_pipeline.models import flaml_dml
+from doubleml_pipeline.preprocessing import features
 from doubleml_pipeline.preprocessing import scalers
 from doubleml_pipeline.test import helpers
 import numpy as np
@@ -233,10 +231,6 @@ def _make_orchestrator(out_dir, d_col: str, mode: str, **extra):
 
 class _StopAfterFirstModelError(Exception):
   """Raised by the spy that cuts a run short after the first Phase 1 model."""
-
-
-class _TreatmentPredictionError(AssertionError):
-  """`T_pred` / `T_res` differ from the hand calculation."""
 
 
 @dataclasses.dataclass
@@ -533,12 +527,11 @@ def _check_phases_1_to_3(
   y_strategy, y_numbers, _ = by_hand["sales"]
   t_strategy, t_numbers, t_scaled = by_hand[d_col]
   kpi = f"estimated_incremental_KPI_{d_col}"
-  row_groups = (
+
+  for rows, label in (
       (run.fit_rows, "fitted rows"),
       (run.scored_rows, "scored rows"),
-  )
-
-  for rows, label in row_groups:
+  ):
     population = frame.loc[rows, POPULATION]
     outputs = run.outputs.loc[rows]
     results = run.df_1a.loc[rows]
@@ -559,6 +552,14 @@ def _check_phases_1_to_3(
     _assert_close(
         results["Y_res"], frame.loc[rows, "sales"] - y_pred, f"Y_res, {label}"
     )
+    t_pred = helpers.unscale_by_hand(
+        t_strategy, t_numbers, outputs["t_hat"], population
+    )
+    treatment = helpers.unscale_by_hand(
+        t_strategy, t_numbers, t_scaled.loc[rows], population
+    )
+    _assert_close(results["T_pred"], t_pred, f"T_pred, {label}")
+    _assert_close(results["T_res"], treatment - t_pred, f"T_res, {label}")
     # Incremental KPI: (treatment - treatment at T = 0) x effect, which is a
     # difference of two outcomes.
     t_zero = helpers.scale_by_hand(t_strategy, t_numbers, 0.0, population)
@@ -578,24 +579,6 @@ def _check_phases_1_to_3(
           ),
           f"{column}, {label}",
       )
-
-  # `T_pred` / `T_res` come last, with an error type of their own, so that
-  # the xfail of the runs with an already fitted scaler covers nothing else.
-  for rows, label in row_groups:
-    population = frame.loc[rows, POPULATION]
-    t_pred = helpers.unscale_by_hand(
-        t_strategy, t_numbers, run.outputs.loc[rows, "t_hat"], population
-    )
-    treatment = helpers.unscale_by_hand(
-        t_strategy, t_numbers, t_scaled.loc[rows], population
-    )
-    try:
-      _assert_close(run.df_1a.loc[rows, "T_pred"], t_pred, f"T_pred, {label}")
-      _assert_close(
-          run.df_1a.loc[rows, "T_res"], treatment - t_pred, f"T_res, {label}"
-      )
-    except AssertionError as error:
-      raise _TreatmentPredictionError(str(error)) from error
 
 
 def _id(t_strategy: str, y_strategy: str, mode: str, fitted: bool) -> str:
@@ -626,26 +609,12 @@ def _saturation_cases():
   for mode in (ADOPTED, LINEAR):
     for t_strategy, y_strategy in settings:
       for fitted in (False, True):
-        marks = ()
-        if mode == ADOPTED and fitted and t_strategy != NONE:
-          marks = pytest.mark.xfail(
-              strict=True,
-              raises=_TreatmentPredictionError,
-              reason=(
-                  "A scaler the caller has already fitted keeps the numbers"
-                  " of the treatment. The pipeline takes the saturated"
-                  " treatment off the scaler lists, but T_pred is still"
-                  " multiplied by those numbers (the cause is pinned by the"
-                  " second-fit tests of test_preprocessing.py)."
-              ),
-          )
         cases.append(
             pytest.param(
                 t_strategy,
                 y_strategy,
                 mode,
                 fitted,
-                marks=marks,
                 id=_id(t_strategy, y_strategy, mode, fitted),
             )
         )
@@ -771,6 +740,52 @@ def test_scaling_of_a_price_treatment(fitted, tmp_path):
   _check_rows(run, frame, NO_SATURATION)
   _check_phases_1_to_3(
       run, frame, "price_gap", model_x_cols, strategy_of, NO_SATURATION
+  )
+
+
+def test_scaling_of_a_lagged_price_treatment(tmp_path):
+  """The gap of a price lag is scaled like the lag, not like the price."""
+  rng = np.random.default_rng(11)
+  df = _panel()
+  df["price"] = rng.uniform(80.0, 120.0, size=len(df))
+  df = features.create_lagged_features(
+      df, ["price"], 1, "date", unit_col=["item", "geo"], na_fill=True
+  ).reset_index(drop=True)
+  scaler = _make_scaler({
+      "price_l1": "standardize",
+      "price": "min_max",
+      "sales": "population_median_normalize",
+      "X1": "standardize",
+      "X2": "standardize",
+  })
+  orch = _make_orchestrator(
+      tmp_path, "price_l1", NO_SATURATION, treatment_types={"price_l1": "price"}
+  )
+  model_x_cols = ["X1", "X2", "price_benchmark"]
+
+  run = _run_until_first_model(orch, df, scaler, "price_gap_l1", model_x_cols)
+
+  # The pipeline replaces the lag by the gap of the same item x geo group one
+  # week earlier (0 in the first week; the weeks of a group are consecutive
+  # rows) and adds the benchmark to the covariates.  The gap joins the scaler
+  # list of the lag, the benchmark the list of the price.
+  groups = [df["item"], df["geo"]]
+  benchmark = df.groupby(["item", "geo"])["price"].transform("max")
+  gap = benchmark - df["price"]
+  frame = df.assign(
+      price_benchmark=benchmark,
+      price_gap_l1=gap.groupby(groups).shift(1).fillna(0.0),
+  )
+  strategy_of = {
+      "price_gap_l1": "standardize",
+      "price_benchmark": "min_max",
+      "sales": "population_median_normalize",
+      "X1": "standardize",
+      "X2": "standardize",
+  }
+  _check_rows(run, frame, NO_SATURATION)
+  _check_phases_1_to_3(
+      run, frame, "price_gap_l1", model_x_cols, strategy_of, NO_SATURATION
   )
 
 

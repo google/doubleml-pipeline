@@ -1471,7 +1471,8 @@ class CausalWorkflowOrchestrator:
        `_price_investment_column`) and becomes the treatment's
        `treatment_spend_cols` entry;
     4. if the price column is listed in one of the scaler's column lists, the
-       gap and benchmark columns are added to the same list.
+       gap and benchmark columns are added to the same list; the gap of a lag
+       `d_l<n>` is added to the list that names `d_l<n>`.
 
     Rows with `D < 0` keep their negative gap in the estimation and count as
     zero investment in the ROI and the optimization. The caller's `df` is not
@@ -1714,6 +1715,10 @@ class CausalWorkflowOrchestrator:
       self._extend_scaler_lists(
           scaler, base, [names["gap"], names["benchmark"]]
       )
+      # The gap of a lag replaces the lag column as the treatment, so it
+      # takes the scaling of that column.
+      for d_col in lag_members:
+        self._extend_scaler_lists(scaler, d_col, [renames[d_col]])
 
     # The renames: d_cols, treatment_types, treatment_spend_cols, the
     # benchmark specifications and the x_cols of the renamed treatments.
@@ -1759,21 +1764,21 @@ class CausalWorkflowOrchestrator:
   def _extend_scaler_lists(
       self,
       scaler: scalers.CausalDataScaler,
-      base: str,
+      listed_col: str,
       new_cols: List[str],
   ) -> None:
-    """Adds `new_cols` to every scaler list that names the price column."""
+    """Adds `new_cols` to every scaler list that names `listed_col`."""
     for list_name in _SCALER_COL_LISTS:
       cols = getattr(scaler, list_name, None)
-      if not cols or base not in cols:
+      if not cols or listed_col not in cols:
         continue
       added = [c for c in new_cols if c not in cols]
       if not added:
         continue
       cols.extend(added)
       print(
-          f"  ├─ '{base}' is in scaler.{list_name}: {added} added to the same"
-          " list",
+          f"  ├─ '{listed_col}' is in scaler.{list_name}: {added} added to the"
+          " same list",
           flush=True,
       )
 

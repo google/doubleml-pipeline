@@ -1075,10 +1075,10 @@ class SaturationEndToEndTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as out_dir:
       df = make_panel(n_geo=5, n_periods=26)
       # Treatment normalization bridge: a saturated treatment must use a
-      # DIVISIVE normalization. `standardize` shifts, so it would send roughly
-      # half the rows negative (silently clipped to 0 by f) and would break
-      # f(0) = 0; the pipeline now rejects that combination outright.
-      # Covariates and the outcome are unconstrained.
+      # DIVISIVE normalization. `standardize` shifts, so T = 0 would no longer
+      # be 0 and f(0) = 0 would no longer mean "no treatment"; the pipeline
+      # rejects that combination outright.  Covariates and the outcome are
+      # unconstrained.
       scaler = scalers.CausalDataScaler(
           median_normalize_cols=["spend"],
           standardize_cols=["X1", "X2", "sales"],

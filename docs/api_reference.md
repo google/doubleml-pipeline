@@ -522,10 +522,12 @@ module-level constant shared across runs.
 > A saturated treatment **must** use a *divisive* normalization:
 > `median_normalize_cols` or `population_median_normalize_cols`. Configuring it
 > for `standardize`, `population_standardize` or `min_max` raises a `ValueError`
-> at the start of Phase 0. Those three *shift* the treatment, which sends
-> roughly half the rows negative (silently clipped to `0` by `f`) and destroys
-> `f(0) = 0`, the identity the Phase 4 theta recovery depends on. Covariates and
-> the outcome are unconstrained — only the treatment column is.
+> at the start of Phase 0. Those three *shift* the treatment, so `T = 0` is no
+> longer mapped to `0`: the curve is anchored at `f(0) = 0` (a negative value
+> is evaluated as `f(T) = −f(−T)`, not clipped), so it would bend around the
+> shifted origin instead of around zero treatment, and `f(0) = 0` — the
+> identity the Phase 4 theta recovery depends on — would be lost. Covariates
+> and the outcome are unconstrained — only the treatment column is.
 
 > [!NOTE]
 > Alpha is estimated against the **normalized** treatment `T/c`, not raw spend.
@@ -655,7 +657,9 @@ disk can execute arbitrary code).
     phases. Example: `pd.read_csv('data.csv')`.
 -   `scaler` *(CausalDataScaler)*: Initialized scaler object. Its column lists
     may only name columns of `df`. The run works on a copy: the object passed
-    is not modified. Example: `CausalDataScaler(standardize_cols=['spend'])`.
+    is not modified. The run fits that copy itself, so the parameters of a
+    `fit` the caller ran beforehand are not used. Example:
+    `CausalDataScaler(standardize_cols=['spend'])`.
 -   `top_n` *(int, default=5)*: Number of top models to select for the final
     ensemble. Example: `3`.
 -   `n_reps` *(int, default=20)*: Number of repetitions for the robust ensemble
@@ -824,13 +828,15 @@ single scaling. The lists can be edited after construction, so `fit` and
 **Fitted attributes** (set by `fit`): `standard_params_`,
 `pop_standard_params_`, `pop_median_params_`, `min_max_params_`,
 `median_params_` *(Dict[str, Dict[str, float]], one entry per scaled
-column)* and, when a population-based scaling is configured,
-`raw_population_` *(pd.Series, the raw population column of the fitting
-frame)*.
+column)* and `raw_population_` *(pd.Series, the raw population column of the
+fitting frame; `None` when no population-based scaling is configured)*.
 
 #### `fit(self, x: pd.DataFrame, y: Optional[Any] = None) -> 'CausalDataScaler'`
 
-Computes the scaling parameters from `x` and returns `self`.
+Computes the scaling parameters from `x` and returns `self`. Every call starts
+from scratch: the parameters of an earlier `fit` are discarded, so a column
+that has since been taken off its list, or moved to another list, is scaled
+and restored by its current listing only.
 
 **Raises:**
 

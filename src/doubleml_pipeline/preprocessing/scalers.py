@@ -107,6 +107,10 @@ class CausalDataScaler:
   def fit(self, x: pd.DataFrame, y: Optional[Any] = None) -> 'CausalDataScaler':
     """Fits the scaler attributes to the dataset and calculates parameters.
 
+    Every call starts from scratch: the parameters of an earlier fit are
+    discarded, so the scaler holds parameters only for the columns that are
+    listed at this call.
+
     Args:
       x: The dataframe to compute the scaling parameters from.
       y: Optional target variable. Ignored; accepted for scikit-learn API
@@ -148,8 +152,15 @@ class CausalDataScaler:
           f'Specified scaling column(s) not found in dataframe: {described}.'
       )
 
-    if needs_pop:
-      self.raw_population_ = df[self.population_col].copy()
+    # Start from scratch.  A column that left its list, or moved to another
+    # list, since an earlier fit would otherwise keep the parameters of that
+    # fit, and `inverse_transform_column` would still apply them.
+    self.standard_params_ = {}
+    self.pop_standard_params_ = {}
+    self.pop_median_params_ = {}
+    self.min_max_params_ = {}
+    self.median_params_ = {}
+    self.raw_population_ = df[self.population_col].copy() if needs_pop else None
 
     # 1. Standard Scaling
     for col in [c for c in self.standardize_cols if c in df.columns]:

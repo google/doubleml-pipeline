@@ -962,6 +962,40 @@ class OrchestratorPriceTreatmentTest(unittest.TestCase):
     self._apply(orch, scaler=untouched)
     self.assertEqual(untouched.standardize_cols, ["X1"])
 
+  def test_scaler_list_of_a_lag_receives_the_gap_of_the_lag(self):
+    """``price_gap_l1`` joins the list that names ``price_l1``.
+
+    The gap of a lag replaces the lag column as the treatment, so it takes
+    the scaling of that column.  The benchmark follows the base column only.
+    """
+    df = features.create_lagged_features(
+        self.df, ["price"], 1, "date", unit_col=["item", "geo"], na_fill=True
+    ).reset_index(drop=True)
+    d_cols = ["price", "price_l1"]
+    types = {"price": "price", "price_l1": "price"}
+
+    # The base column and its lag under different strategies.
+    scaler = scalers.CausalDataScaler(
+        standardize_cols=["price"], min_max_cols=["price_l1"]
+    )
+    self._apply(self._orchestrator(d_cols, types), df, scaler=scaler)
+    self.assertEqual(
+        scaler.standardize_cols, ["price", "price_gap", "price_benchmark"]
+    )
+    self.assertEqual(scaler.min_max_cols, ["price_l1", "price_gap_l1"])
+
+    # Only the lag is listed: nothing is added for the base column.
+    only_lag = scalers.CausalDataScaler(standardize_cols=["price_l1"])
+    self._apply(self._orchestrator(d_cols, types), df, scaler=only_lag)
+    self.assertEqual(only_lag.standardize_cols, ["price_l1", "price_gap_l1"])
+
+    # Only the base column is listed: the gap of the lag is not scaled.
+    only_base = scalers.CausalDataScaler(standardize_cols=["price"])
+    self._apply(self._orchestrator(d_cols, types), df, scaler=only_base)
+    self.assertEqual(
+        only_base.standardize_cols, ["price", "price_gap", "price_benchmark"]
+    )
+
   def test_scaler_listing_a_created_column_is_rejected(self):
     """Scaler lists name input columns only; the run adds the gap itself."""
     scaler = scalers.CausalDataScaler(standardize_cols=["price", "price_gap"])
