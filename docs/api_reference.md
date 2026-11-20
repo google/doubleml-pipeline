@@ -1875,7 +1875,7 @@ function never refits the short model per contour.
 
 ### Function: `plot_cate_scatter_matrix`
 
-#### `plot_cate_scatter_matrix(df_1a_consolidated, d_cols, cont_cols, bin_cols, eq_str_dict, out_path, cate_stats_dict=None) -> Dict[Tuple[int, int], Tuple[xlim, ylim]]`
+#### `plot_cate_scatter_matrix(df_1a_consolidated, d_cols, cont_cols, bin_cols, eq_str_dict, out_path, cate_stats_dict=None) -> Dict[str, Any]`
 
 Visualizes the heterogeneity of treatment effects (CATE) against specific
 continuous or binary covariates using scatter plots with overlaid gradient
@@ -1893,15 +1893,19 @@ contours. Includes formatted CATE mathematical equations.
 -   `cate_stats_dict` *(Optional[dict])*: `{treatment: {"coef", "pvalue",
     "stderr"}}` for the "P-value & Std Err" box.
 
-**Returns:** `{(row, col): (xlim, ylim)}` of every cell (row `len(d_cols)` is
-the total row): the axis scales the chart was saved with.
+**Returns:** a dict with `axis_limits` — `{(row, col): (xlim, ylim)}` of every
+cell (with several treatments, row `len(d_cols)` is the total row), the axis
+scales the chart was saved with — and `legend_fontsize`, the font size of the
+"Binary Covariates" legend in points, which `plot_cate_response_curves` takes
+so that its legend matches.
 
 **Layout:** the grid holds one square cell per (treatment, continuous covariate)
-pair plus a trailing "total" row. Every cell is a 6-inch square — the same
-size in this chart and in `plot_cate_response_curves`, so the HTML report can
-show the two pngs with equal cells and fonts — and the grid width and figure
-height follow from the cell size, the spacing and the margins. The right-hand
-column (the "Binary Covariates"
+pair plus, with several treatments, a trailing "total" row (with one treatment
+that row would repeat the row of the treatment). Every cell is a 6-inch square
+— the same size in this chart and in `plot_cate_response_curves`, so the HTML
+report can show the two pngs with equal cells and fonts — and the grid width
+and figure height follow from the cell size, the spacing and the margins. The
+right-hand column (the "Binary Covariates"
 legend, the "Estimated CATE Functions" box and the "P-value & Std Err" box) is
 sized from its monospace font so that the three boxes span it edge to edge —
 no blank space is left at the right of the png — and the legend is expanded to
@@ -1913,8 +1917,10 @@ that fits in 10 characters, otherwise `{v:.3e}` truncated to 10 — i.e.
 scientific notation from `1e6` upwards and from `-1e5` downwards), so no
 text can run beyond the grey boxes. The monospace
 font starts at 22 pt and is only shrunk (never below 9 pt) when the three
-boxes would not fit the figure height; if they still do not fit at 9 pt the
-figure grows taller instead. The cell fonts are 26 pt (titles) / 24 pt
+boxes would not fit beside the cells — the single row of one treatment leaves
+the least room. If they still do not fit at 9 pt, the figure grows at its
+bottom: the cells stay under the title, the column runs on below them and the
+png ends under the column. The cell fonts are 26 pt (titles) / 24 pt
 (axis labels) / 20 pt
 (ticks); titles, axis labels and the colorbar label are wrapped to the measured
 cell size (breaking after underscores or spaces) and the margins between and
@@ -1926,27 +1932,31 @@ x and colorbar labels, three for y labels) is its font reduced, never below
 
 ### Function: `plot_cate_response_curves`
 
-#### `plot_cate_response_curves(df_1a_consolidated, d_cols, bin_cols, out_path, response_specs=None) -> Dict[str, Dict[str, float]]`
+#### `plot_cate_response_curves(df_1a_consolidated, d_cols, bin_cols, out_path, response_specs=None, legend_fontsize=None) -> Dict[str, Dict[str, float]]`
 
 The companion of `plot_cate_scatter_matrix`, written by the orchestrator as
 `step4_consolidated_results/graph/004_cate/cate_response_curves.png` and shown
-under the scatter matrix in the `004_cate` tab of the HTML report. **Layout:**
-a single row of `len(d_cols) + 1` square cells — one per treatment, titled
-with the treatment name, plus a trailing `Total` cell — with the same cell
-size, fonts, label wrapping and axis labels as the scatter matrix. There is no
-column per continuous covariate (the curves do not depend on them) and no
-right-hand text column: the `Binary Covariates` legend sits centred under the
-row (wrapped into as many columns as fit the row's width), and the CATE
+with the scatter matrix in the `004_cate` tab of the HTML report. **Layout:**
+one square cell per treatment, titled with the treatment name, plus, with
+several treatments, a trailing `Total` cell — with the same cell size, fonts,
+label wrapping and axis labels as the scatter matrix. There is no column per
+continuous covariate (the curves do not depend on them), and the CATE
 equations with their statistics are not repeated (they are in the scatter
-matrix right above). Instead of the dots every cell shows, per
-binary-covariate combination (same colour as its dots, translucent, no dots),
-the response curve `T -> incremental KPI` in the **original** treatment units:
-under a saturation family the curve `theta_g * fbar(T / c_g; alpha_hat, T_ref)`
-of the group, otherwise the straight line `theta_g * T`. `theta_g` is the
-least-squares slope through the origin of the group's incremental KPI on its
-per-row transformed treatment (`KPI_i = theta_i * f_i` under the PLR) and
-`c_g` the group's median treatment divisor (the treatment normalization
-bridge).
+matrix). The chart is drawn on the layout of the scatter matrix with one
+column of cells: the cells are stacked in that column and the
+`Binary Covariates` legend sits at the top of the right-hand column, in the
+place, the width and the font of the scatter matrix's legend (its entries
+take the font size `legend_fontsize`). With several treatments the report
+shows the two charts side by side.
+
+Instead of the dots every cell shows, per binary-covariate combination (same
+colour as its dots, translucent, no dots), the response curve
+`T -> incremental KPI` in the **original** treatment units: under a saturation
+family the curve `theta_g * fbar(T / c_g; alpha_hat, T_ref)` of the group,
+otherwise the straight line `theta_g * T`. `theta_g` is the least-squares slope
+through the origin of the group's incremental KPI on its per-row transformed
+treatment (`KPI_i = theta_i * f_i` under the PLR) and `c_g` the group's median
+treatment divisor (the treatment normalization bridge).
 
 **Scale:** every curve covers its own observed treatment range `[0, max T]`,
 and all cells share **one axis scale from the origin** — the same x and y
@@ -1962,13 +1972,11 @@ every row responds as `theta_i * fbar(T / c_g)` with its own CATE
 group `theta_i` varies only through the continuous CATE covariates, so the band
 is the spread of the response the continuous covariates induce — 95% of the
 group's rows respond inside it. Groups with fewer than two rows carrying a
-slope get no band. The `Total` cell reuses the treatment's curve with a single
-treatment and falls back to a per-group straight-line fit otherwise; every
+slope get no band. The `Total` cell shows a per-group straight-line fit; every
 cell states the response used in a small note in its **lower-right corner**
 (`response: tanh saturation (alpha_hat = ..., T_ref = ... on T/c)`,
 `response: linear`, or `response: linear fit (sum of treatments)` in the
-`Total` cell of a multi-treatment run) — the area the curves rising from the
-origin leave clear.
+`Total` cell) — the area the curves rising from the origin leave clear.
 
 **Parameters:**
 
@@ -1983,6 +1991,11 @@ origin leave clear.
     mapping the normalized treatment `T / c` to `fbar`, "label": str}}` for the
     treatments under a saturation family (the orchestrator builds it from
     Phase 0: `_cate_response_specs`); treatments missing from it are linear.
+-   `legend_fontsize` *(Optional[float])*: Font size of the legend entries in
+    points (the legend title is 2 pt larger). The orchestrator passes the
+    `legend_fontsize` that `plot_cate_scatter_matrix` returned, so that the
+    two legends match; `None` uses 22 pt, the size of that legend before any
+    shrinking.
 
 **Returns:** `{treatment: {group label: theta_g}}` of the fitted group slopes.
 
@@ -2202,7 +2215,8 @@ and `roi_output_001_time_series_charts (<t>)` … `roi_output_007_optimization
 (<t>)` per non-`spend` treatment.
 
 **Header:** the light green box above the tabs lists the run's columns and
-model settings; its last rows are `CATE Intercept`, `Selected family`,
+model settings; its last rows are the CATE settings (`CATE Structure`,
+`CATE DF`, `CATE Degree` and `CATE Intercept`, on one row), `Selected family`,
 `Decision` and `Simple Optimization`. In `Treatment Types` a `price`
 treatment carries its benchmark — `price (benchmark: q_95)`, `price
 (benchmark: rolling_max, window: 26W)`, `price (benchmark: column '<c>')`,
@@ -2234,10 +2248,14 @@ treatments that disagree the decision is listed as `<treatment>:
 `["simple_optimization"]` and `["phase4_optimization"]`; metadata files
 without the user's selection show `user selection: n/a (older metadata)`.
 
-**CATE charts (`004_cate`):** the scatter matrix and the response curves are
-drawn with cells of one size, and the tab displays the two pngs at one common
-scale (the wider at the full width, the other at a proportional width), so
-their cells and fonts match on screen.
+**CATE charts (`004_cate`):** the scatter matrix and the response curves each
+sit in a tile, and the two tiles have one width. With one treatment the tiles
+span the tab, the scatter matrix above the response curves; with several
+treatments they sit side by side, each taking half of the tab, and the
+response curves are stacked in a column like the rows of the scatter matrix.
+The two charts are drawn with cells of one size, and a tile shows its png at
+the scale common to both (the wider png fills its tile, the other takes a
+proportional share of its tile), so their cells and fonts match on screen.
 
 **File name:** `<output_dir>/<treatment>_<outcome>[_<family>].html`. Every
 part is sanitized with `re.sub(r"[^0-9A-Za-z._-]+", "_", …).strip("._-")`,

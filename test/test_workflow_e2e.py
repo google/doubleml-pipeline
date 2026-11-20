@@ -525,12 +525,36 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
           },
       )
       self.assertFalse(orch.simple_optimization)
+      # The scatter matrix reports the font size of its legend; record it and
+      # what the response curves are called with.
+      real_scatter_matrix = workflow.plots.plot_cate_scatter_matrix
+      cate_matrices = []
+
+      def scatter_matrix_spy(*args, **kwargs):
+        """Draws the scatter matrix and records what it returns.
+
+        Args:
+          *args: Passed on to `plot_cate_scatter_matrix`.
+          **kwargs: Passed on to `plot_cate_scatter_matrix`.
+
+        Returns:
+          What `plot_cate_scatter_matrix` returns.
+        """
+        cate_matrices.append(real_scatter_matrix(*args, **kwargs))
+        return cate_matrices[-1]
+
       log_buffer = io.StringIO()
       with mock.patch.object(
           flaml_dml.FlamlRegressorDoubleML, "fit", helpers.deterministic_fit
-      ), warnings.catch_warnings(record=True) as caught, (
-          contextlib.redirect_stdout(log_buffer)
-      ):
+      ), mock.patch.object(
+          workflow.plots, "plot_cate_scatter_matrix", scatter_matrix_spy
+      ), mock.patch.object(
+          workflow.plots,
+          "plot_cate_response_curves",
+          wraps=workflow.plots.plot_cate_response_curves,
+      ) as response_curves_spy, warnings.catch_warnings(
+          record=True
+      ) as caught, contextlib.redirect_stdout(log_buffer):
         warnings.simplefilter("always")
         orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=1)
       log = log_buffer.getvalue()
@@ -717,6 +741,13 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
       self.assertIsNone(metadata["simple_optimization_requested"])
       self.assertFalse(metadata["simple_optimization_derived"])
       self.assertFalse(metadata["simple_optimization_forced"])
+      # The four CATE settings share one row, right above `Selected family`.
+      self.assertIn(
+          "<strong>CATE Structure:</strong> auto_additive,"
+          " <strong>CATE DF:</strong> 3.0, <strong>CATE Degree:</strong> 2.0,"
+          " <strong>CATE Intercept:</strong> 0.0 <br>",
+          html,
+      )
       self.assertLess(
           html.index("<strong>CATE Intercept:</strong>"),
           html.index("<strong>Selected family:</strong>"),
@@ -758,8 +789,17 @@ class LinearFallbackEndToEndTest(unittest.TestCase):
       )
       self.assertIn("_timeseries_incremental_effect_before_after.png", html)
       self.assertIn("_timeseries_roi_before_after.png", html)
-      # 004_cate: the response-curve chart sits under the scatter matrix.
+      # 004_cate: the response-curve chart sits under the scatter matrix (one
+      # treatment: the two tiles are not put in a row), and its legend takes
+      # the font size of the scatter matrix's legend.
       self.assertIn("cate_response_curves.png", html)
+      self.assertIn('<div class="cate-tiles">', html)
+      self.assertEqual(len(cate_matrices), 1)
+      response_curves_spy.assert_called_once()
+      self.assertEqual(
+          response_curves_spy.call_args.kwargs["legend_fontsize"],
+          cate_matrices[0]["legend_fontsize"],
+      )
 
       # Phase 4 (simple optimizer, spend): before / after charts, yearly
       # summary and the CATE response curves exist on disk.

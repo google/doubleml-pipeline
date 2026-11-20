@@ -100,12 +100,12 @@ def _cate_image_widths(paths: list[str]) -> list[str]:
   """CSS widths that display the CATE pngs at one common scale.
 
   The scatter matrix and the response curves are drawn with cells of the
-  same size (``plots._CATE_CELL_IN``) but have different numbers of columns,
-  so their pngs differ in width.  Shown at the same display width they would
-  be scaled by different factors and their cells and fonts would no longer
-  match.  The widest png takes the full report width and every other one a
-  width proportional to its own pixel width, so that one image pixel maps to
-  the same screen size in both charts.
+  same size (``plots._CATE_CELL_IN``) but can differ in width.  Shown at the
+  same display width they would be scaled by different factors and their
+  cells and fonts would no longer match.  The report puts each png in a tile
+  and the two tiles have one width: the widest png fills its tile and every
+  other one takes a share of its tile proportional to its own pixel width, so
+  that one image pixel maps to the same screen size in both charts.
 
   Args:
     paths: The png paths, in display order.
@@ -938,6 +938,18 @@ def generate_html_report(output_dir: str) -> str | None:
       metadata.get("saturation_selected_family") or {}
   )
 
+  # The four CATE settings share one row of the header; each setting lists
+  # one value per treatment, like the rows around it.
+  cate_settings_html = ", ".join(
+      f"<strong>{label}:</strong> {', '.join(map(str, values))}"
+      for label, values in (
+          ("CATE Structure", cate_structure),
+          ("CATE DF", cate_df),
+          ("CATE Degree", cate_degree),
+          ("CATE Intercept", cate_intercept),
+      )
+  )
+
   # Reported in the header: the Phase 0 outcome per treatment -- `decision`
   # ("saturation" / "linear") with the family adopted when it is
   # "saturation".  Without a configured family there is no Phase 0 and the
@@ -1035,6 +1047,14 @@ def generate_html_report(output_dir: str) -> str | None:
         select {{ font-size: 16px; padding: 5px; margin-right: 10px; border: 1px solid #2e7d32; color: #2e7d32; border-radius: 4px; }}
         .chart-img {{ max-width: 100%; height: auto; margin-top: 15px; cursor: zoom-in; border: 1px solid #e8f5e9; border-radius: 4px; transition: transform 0.2s; }}
         .chart-img:hover {{ box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
+        /* 004_cate: the two charts sit in tiles of one width, one under the
+           other or, with several treatments, side by side (half of the tab
+           each).  A tile shows its png at the scale common to both charts. */
+        .cate-tile {{ box-sizing: border-box; margin-top: 15px;
+                      border: 1px solid #e8f5e9; border-radius: 4px; }}
+        .cate-tile .chart-img {{ display: block; margin-top: 0; border: none; }}
+        .cate-tiles-row {{ display: flex; gap: 15px; }}
+        .cate-tiles-row .cate-tile {{ flex: 1 1 0; min-width: 0; }}
 
         .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.8); }}
         .modal-content {{ margin: auto; display: block; max-width: 90%; max-height: 90%; margin-top: 2%; }}
@@ -1068,10 +1088,7 @@ def generate_html_report(output_dir: str) -> str | None:
             <strong>Model Group(s):</strong> {', '.join(map(str, model_groups))} <br>
             <strong>Model Naming Convention Note:</strong> [Y-model]_[T-model]_[number_of_folds]_[number_of_repetitions]_[time_budget]_[number_of_covariates_for_cate]. <br>
             <strong>Covariates for CATE:</strong> {', '.join(map(str, covariates_for_cate))} <br>
-            <strong>CATE Structure:</strong> {', '.join(map(str, cate_structure))} <br>
-            <strong>CATE DF:</strong> {', '.join(map(str, cate_df))} <br>
-            <strong>CATE Degree:</strong> {', '.join(map(str, cate_degree))} <br>
-            <strong>CATE Intercept:</strong> {', '.join(map(str, cate_intercept))} <br>
+            {cate_settings_html} <br>
             <strong>Selected family:</strong> {selected_family_str} <br>
             <strong>Decision:</strong> {decision_str} <br>
             <strong>Simple Optimization:</strong> {simple_optimization_str}
@@ -1168,9 +1185,12 @@ def generate_html_report(output_dir: str) -> str | None:
     </div>
 """
 
-  # The two CATE charts are drawn with cells of one size; display them at one
-  # common scale so their cells and fonts match on screen (the widest png
-  # takes the full width, the other a proportional share).
+  # The two CATE charts sit in tiles of one width: one under the other with a
+  # single treatment, side by side with several (both charts are then tall,
+  # with one row of cells per treatment and one for the total).  The charts are
+  # drawn with cells of one size; each tile shows its png at one common scale
+  # so their cells and fonts match on screen (the widest png fills its tile,
+  # the other takes a proportional share).
   cate_rel_paths = [
       "step4_consolidated_results/graph/004_cate/cate_scatter_matrix.png",
       "step4_consolidated_results/graph/004_cate/cate_response_curves.png",
@@ -1178,16 +1198,22 @@ def generate_html_report(output_dir: str) -> str | None:
   cate_styles = _cate_image_widths(
       [os.path.join(output_dir, p) for p in cate_rel_paths]
   )
-  cate_images_html = "\n".join(
-      f'        <img class="chart-img" style="{style}"'
+  cate_tiles_class = (
+      "cate-tiles cate-tiles-row" if len(treatment_cols) > 1 else "cate-tiles"
+  )
+  cate_tiles_html = "\n".join(
+      '            <div class="cate-tile">'
+      f'<img class="chart-img" style="{style}"'
       f' src="{get_b64(rel_path)}" onclick="expandImage(this.src)"'
-      " onerror=\"this.style.display='none'\">"
+      " onerror=\"this.parentNode.style.display='none'\"></div>"
       for rel_path, style in zip(cate_rel_paths, cate_styles)
   )
   html += f"""
     <div id="tab_004_cate" class="tab-content">
         <h3>CATE Estimation</h3>
-{cate_images_html}
+        <div class="{cate_tiles_class}">
+{cate_tiles_html}
+        </div>
     </div>
 """
 

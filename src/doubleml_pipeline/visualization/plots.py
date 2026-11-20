@@ -44,6 +44,7 @@ import matplotlib.dates as mdates
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
+import matplotlib.transforms as mtransforms
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -1086,6 +1087,21 @@ def _cate_text_blocks(eq_str_dict, cate_stats_dict, max_chars):
 _CATE_LABEL_BUDGET = {'title': 2, 'x': 2, 'y': 3, 'cbar': 2}
 
 
+def _draws_total(d_cols):
+  """Whether the CATE charts draw a "total" cell after the treatments.
+
+  With one treatment the total is that treatment, so its cell would only
+  repeat the cell of the treatment.
+
+  Args:
+    d_cols: Treatment columns.
+
+  Returns:
+    True with several treatments.
+  """
+  return len(d_cols) > 1
+
+
 def _cate_cell_texts(d_cols, cont_cols):
   """Raw (unwrapped) labels of every cell of the CATE scatter matrix.
 
@@ -1097,9 +1113,10 @@ def _cate_cell_texts(d_cols, cont_cols):
     ``{'title': [...], 'x': [...], 'y': [...], 'cbar': [...]}``.
   """
   x_labels = [f'Treatment: {d}' for d in d_cols]
-  x_labels.append('Total Treatment (Excl. Lags)')
   y_labels = [f'Inc. Effect: estimated_incremental_KPI_{d}' for d in d_cols]
-  y_labels.append('Total Incremental KPI')
+  if _draws_total(d_cols):
+    x_labels.append('Total Treatment (Excl. Lags)')
+    y_labels.append('Total Incremental KPI')
   return {
       'title': [f'Grouped by: {c}' for c in (cont_cols or [])],
       'x': x_labels,
@@ -1116,8 +1133,8 @@ def _cate_response_cell_texts(d_cols):
   """Raw (unwrapped) labels of the cells of the CATE response-curve chart.
 
   Same x / y labels as the scatter matrix (:func:`_cate_cell_texts`); the
-  title of a cell names its treatment (``'Total'`` for the trailing cell) and
-  there is no colorbar.
+  title of a cell names its treatment (``'Total'`` for the trailing cell of
+  several treatments) and there is no colorbar.
 
   Args:
     d_cols: Treatment columns.
@@ -1126,7 +1143,9 @@ def _cate_response_cell_texts(d_cols):
     ``{'title': [...], 'x': [...], 'y': [...], 'cbar': []}``.
   """
   texts = _cate_cell_texts(d_cols, [])
-  texts['title'] = list(d_cols) + [_TOTAL_CELL_TITLE]
+  texts['title'] = list(d_cols)
+  if _draws_total(d_cols):
+    texts['title'].append(_TOTAL_CELL_TITLE)
   return texts
 
 
@@ -1145,10 +1164,6 @@ def _fit_cell_label(kind, text, cell_in):
   return _fit_text(text, cell_in, fontsize, _CATE_LABEL_BUDGET[kind])
 
 
-# Right margin of the single-row response chart, which has no colorbar
-# gutter: room for the last tick label of the last cell.
-_CATE_ROW_RIGHT_IN = 1.0
-
 # Edge of every (square) cell of the two CATE charts, in inches.  The same
 # constant for the scatter matrix and the response curves, so their cells,
 # fonts and tick labels are drawn at exactly the same size; the HTML report
@@ -1157,7 +1172,7 @@ _CATE_ROW_RIGHT_IN = 1.0
 _CATE_CELL_IN = 6.0
 
 
-def _cate_cell_geometry(n_cols, cell_texts, colorbar=True):
+def _cate_cell_geometry(n_cols, cell_texts):
   """Square-cell geometry (inches) shared by the CATE charts.
 
   Every cell is a square of ``_CATE_CELL_IN`` inches, in both charts.  The
@@ -1172,15 +1187,12 @@ def _cate_cell_geometry(n_cols, cell_texts, colorbar=True):
     cell_texts: The raw cell labels of every kind in ``_CATE_LABEL_BUDGET``
       (see :func:`_cate_cell_texts`; a kind without labels, such as
       ``'cbar'`` of the response-curve chart, maps to an empty list).
-    colorbar: Whether a colorbar gutter is reserved to the right of the last
-      column (the scatter matrix); otherwise only the room for the last tick
-      label (the response-curve chart).
 
   Returns:
     A dict with ``grid_width`` (width of the cell grid including its margins),
-    ``cell_in`` (edge of a cell), the margins ``left_in``, ``right_in``,
-    ``top_in``, ``bottom_in``, and the gridspec spacings ``wspace`` and
-    ``hspace`` (fractions of the cell edge).
+    ``cell_in`` (edge of a cell), the margins ``left_in``, ``right_in`` (the
+    colorbar gutter), ``top_in``, ``bottom_in``, and the gridspec spacings
+    ``wspace`` and ``hspace`` (fractions of the cell edge).
   """
   # Base margins, sized for single-line labels at the fonts above.
   base_left_in = 2.6  # up to a three-line y label + tick labels
@@ -1207,7 +1219,7 @@ def _cate_cell_geometry(n_cols, cell_texts, colorbar=True):
       'left': base_left_in,
       'top': base_top_in + extra['title'],
       'bottom': base_bottom_in + extra['x'],
-      'right': base_cbar_in + extra['cbar'] if colorbar else _CATE_ROW_RIGHT_IN,
+      'right': base_cbar_in + extra['cbar'],
       'gap': extra['x'] + extra['title'],
   }
   grid_width = (
@@ -1227,32 +1239,78 @@ def _cate_cell_geometry(n_cols, cell_texts, colorbar=True):
   }
 
 
+# Vertical placement of the text column of a CATE chart, measured on the
+# height the cells and their margins take.  The column keeps 5% of that height
+# free at the bottom and at the top, and it stays out of the band of the
+# suptitle: the suptitle starts 2% of the height below the top edge and takes
+# about 0.7 in with the gap under it (36 pt text).  The band only matters for
+# a figure of one row; from three rows on the 5% margin is the larger one.
+_CATE_COLUMN_MARGIN = 0.05
+_CATE_SUPTITLE_Y = 0.98
+_CATE_SUPTITLE_BAND_IN = 0.7
+
+
+def _cate_text_column_margins(cells_fig_height):
+  """Free space under and above the text column of a CATE chart.
+
+  Args:
+    cells_fig_height: Height in inches of the cells with their margins (the
+      figure height unless the text column needs more).
+
+  Returns:
+    ``(bottom, top)`` in inches.
+  """
+  bottom = _CATE_COLUMN_MARGIN * cells_fig_height
+  top = max(
+      bottom,
+      (1.0 - _CATE_SUPTITLE_Y) * cells_fig_height + _CATE_SUPTITLE_BAND_IN,
+  )
+  return bottom, top
+
+
 def _cate_matrix_figure(
-    n_rows, n_cols, n_legend_labels, eq_lines, stats_lines, title, cell_texts
+    n_rows,
+    n_cols,
+    n_legend_labels,
+    eq_lines,
+    stats_lines,
+    title,
+    cell_texts,
+    mono_fs=None,
 ):
   """Creates the figure of the CATE scatter matrix.
 
-  One square cell per (treatment, covariate) pair plus the trailing "total"
-  row (:func:`_cate_cell_geometry`), and a right-hand text column that is
-  exactly as wide as the three monospace boxes it carries (so no blank space
-  is left at the right edge).  The monospace font is first sized to fill the
-  column and only shrunk when the three boxes would not fit the figure
-  height.
+  One square cell per (treatment, covariate) pair plus, with several
+  treatments, the trailing "total" row (:func:`_cate_cell_geometry`), and a
+  right-hand text column that is exactly as wide as the three monospace boxes
+  it carries (so no blank space is left at the right edge).  The monospace
+  font is first sized to fill the column and only shrunk when the three boxes
+  would not fit the figure height.  When they do not fit at the smallest font
+  either, the figure grows downwards: the cells keep their place under the
+  title and the text column runs on below them.
+
+  The response curves are drawn on the same figure: one column of cells, and
+  only the legend in the text column (no text lines), at the font size of
+  the scatter matrix (``mono_fs``).
 
   Args:
-    n_rows: Number of cell rows (treatments + 1).
+    n_rows: Number of cell rows (the treatments, plus 1 for the total when
+      there are several).
     n_cols: Number of cell columns (continuous covariates, at least 1).
     n_legend_labels: Number of entries of the "Binary Covariates" legend.
-    eq_lines: Lines of the "Estimated CATE Functions" block.
-    stats_lines: Lines of the "P-value & Std Err" block.
+    eq_lines: Lines of the "Estimated CATE Functions" block (may be empty).
+    stats_lines: Lines of the "P-value & Std Err" block (may be empty).
     title: Figure suptitle.
     cell_texts: The raw cell labels (see :func:`_cate_cell_texts`).
+    mono_fs: Monospace font size to start from, in points (default
+      ``_CATE_MONO_FS``).
 
   Returns:
     A dict with ``fig``, ``axes`` (2-D array), ``ax_right`` (the text column
     axes, frame off), ``cell_in`` (edge of a cell in inches), ``mono_fs``
-    (final monospace font size), ``line_height_norm`` (line height as a
-    fraction of the figure height), ``legend_lines``, ``eq_lines_count`` and
+    (final monospace font size), ``grew`` (whether the figure grew for its
+    text column), ``line_height_norm`` (line height as a fraction of the
+    figure height), ``legend_lines``, ``eq_lines_count`` and
     ``stats_lines_count``.
   """
   geom = _cate_cell_geometry(n_cols, cell_texts)
@@ -1260,9 +1318,11 @@ def _cate_matrix_figure(
   left_in, top_in = geom['left_in'], geom['top_in']
   bottom_in, cbar_in = geom['bottom_in'], geom['right_in']
   wspace, hspace = geom['wspace'], geom['hspace']
-  fig_height = (
-      cell_in * (n_rows + (n_rows - 1) * hspace) + top_in + bottom_in
-  )
+  cells_height = cell_in * (n_rows + (n_rows - 1) * hspace)
+  # The figure is as tall as the cells with their margins, unless the text
+  # column needs more.
+  cells_fig_height = cells_height + top_in + bottom_in
+  fig_height = cells_fig_height
 
   # Fit the right-hand column vertically by shrinking the monospace font
   # rather than by stretching the figure: growing the height is what used to
@@ -1273,18 +1333,22 @@ def _cate_matrix_figure(
   total_lines = legend_lines + eq_lines_count + stats_lines_count
   # Padding lines for the gaps between the legend and the two text boxes.
   padded_lines = total_lines + 6
-  mono_fs = _CATE_MONO_FS
-  available_in = 0.90 * fig_height
+  mono_fs = _CATE_MONO_FS if mono_fs is None else float(mono_fs)
+  column_bottom_in, column_top_in = _cate_text_column_margins(cells_fig_height)
+  available_in = fig_height - column_top_in - column_bottom_in
   line_height_in = mono_fs * 1.75 / 72.0
+  grew = False
   if padded_lines * line_height_in > available_in:
-    mono_fs = max(
-        _CATE_MONO_MIN_FS,
-        mono_fs * available_in / (padded_lines * line_height_in),
-    )
+    fitted_fs = mono_fs * available_in / (padded_lines * line_height_in)
+    grew = fitted_fs < _CATE_MONO_MIN_FS
+    mono_fs = max(_CATE_MONO_MIN_FS, fitted_fs)
     line_height_in = mono_fs * 1.75 / 72.0
-  if padded_lines * line_height_in > available_in:
-    # Still too long even at the minimum readable size; fall back to growing.
-    fig_height = padded_lines * line_height_in / 0.90
+  if grew:
+    # Still too long even at the minimum readable size; fall back to growing:
+    # the figure gains at its bottom the height the column lacks.
+    fig_height = (
+        padded_lines * line_height_in + column_top_in + column_bottom_in
+    )
 
   # The text column is sized from the (final) monospace font so that the
   # three boxes span it edge to edge: box = max_chars glyphs + the round-box
@@ -1301,21 +1365,31 @@ def _cate_matrix_figure(
       figsize=(fig_width, fig_height),
       squeeze=False,
       # Explicit margins: ``tight_layout`` mismeasures axes that carry a forced
-      # box aspect, which lets neighbouring columns overlap.
+      # box aspect, which lets neighbouring columns overlap.  The cells hang
+      # from the top margin, also in a figure that grew for its text column.
       gridspec_kw={
           'left': left_in / fig_width,
           'right': (grid_width - cbar_in) / fig_width,
           'top': 1 - top_in / fig_height,
-          'bottom': bottom_in / fig_height,
+          'bottom': 1 - (top_in + cells_height) / fig_height,
           'wspace': wspace,
           'hspace': hspace,
       },
   )
-  fig.suptitle(title, fontsize=_CATE_SUPTITLE_FS, wrap=True, y=0.98)
-
-  ax_right = fig.add_axes(
-      [grid_frac + gutter_in / fig_width, 0.05, box_in / fig_width, 0.90]
+  # The suptitle keeps the distance from the top edge it has without growth.
+  fig.suptitle(
+      title,
+      fontsize=_CATE_SUPTITLE_FS,
+      wrap=True,
+      y=1.0 - (1.0 - _CATE_SUPTITLE_Y) * (cells_fig_height / fig_height),
   )
+
+  ax_right = fig.add_axes([
+      grid_frac + gutter_in / fig_width,
+      column_bottom_in / fig_height,
+      box_in / fig_width,
+      (fig_height - column_top_in - column_bottom_in) / fig_height,
+  ])
   ax_right.axis('off')
   return {
       'fig': fig,
@@ -1323,11 +1397,81 @@ def _cate_matrix_figure(
       'ax_right': ax_right,
       'cell_in': cell_in,
       'mono_fs': mono_fs,
+      'grew': grew,
       'line_height_norm': (mono_fs * 1.5 / 72.0) / fig_height,
       'legend_lines': legend_lines,
       'eq_lines_count': eq_lines_count,
       'stats_lines_count': stats_lines_count,
   }
+
+
+def _draw_cate_column_legend(layout, handles, labels, extent=None):
+  """Draws the "Binary Covariates" legend at the top of the text column.
+
+  The legend spans exactly ``extent`` (``mode='expand'``).  Labels longer
+  than that (many binary covariates) wrap onto further lines instead of
+  running past the edge.
+
+  Args:
+    layout: The dict returned by :func:`_cate_matrix_figure`.
+    handles: Legend handles (scatter, line or patch artists).
+    labels: Legend labels (one per handle).
+    extent: ``(left, right)`` edge of the legend, as fractions of the text
+      column.  ``None`` (a column without text boxes) takes the extent such a
+      box would have: a line of ``_CATE_MAX_CHARS`` monospace characters, the
+      width every text box is padded to, plus the round-box padding (0.5 em)
+      on both sides.
+
+  Returns:
+    The legend.
+  """
+  fig = layout['fig']
+  ax_right = layout['ax_right']
+  mono_fs = layout['mono_fs']
+  if extent is None:
+    probe = ax_right.text(
+        0.0,
+        1.0,
+        '-' * _CATE_MAX_CHARS,
+        transform=ax_right.transAxes,
+        fontsize=mono_fs,
+        family='monospace',
+    )
+    box = probe.get_window_extent(renderer=fig.canvas.get_renderer())
+    probe.remove()
+    pad_px = 0.5 * mono_fs * fig.dpi / 72.0
+    inv = ax_right.transAxes.inverted()
+    extent = (
+        inv.transform([box.x0 - pad_px, box.y0])[0],
+        inv.transform([box.x1 + pad_px, box.y0])[0],
+    )
+  # The handle, its padding and the box padding take about 7 monospace
+  # characters, so the visible text is wrapped 8 characters short of the box
+  # width.
+  label_w = _CATE_MAX_CHARS - 8
+  padded_labels = [
+      '\n'.join(line.ljust(label_w) for line in _wrap_mono(lbl, label_w))
+      for lbl in labels
+  ]
+  x0, x1 = extent
+  leg = ax_right.legend(
+      handles,
+      padded_labels,
+      loc='upper left',
+      bbox_to_anchor=(x0, 0.0, x1 - x0, 1.0),
+      bbox_transform=ax_right.transAxes,
+      mode='expand',
+      borderaxespad=0.0,
+      title='Binary Covariates',
+      prop={'family': 'monospace', 'size': mono_fs},
+      facecolor='lightgray',
+      edgecolor='black',
+      borderpad=0.5,
+      fancybox=True,
+  )
+  plt.setp(leg.get_title(), family='monospace', fontsize=mono_fs + 2)
+  leg._legend_box.align = 'left'  # pylint: disable=protected-access
+  return leg
 
 
 def _draw_cate_right_column(layout, handles, labels, eq_lines, stats_lines):
@@ -1336,10 +1480,10 @@ def _draw_cate_right_column(layout, handles, labels, eq_lines, stats_lines):
   The "Estimated CATE Functions" box is drawn first (every line padded to
   ``_CATE_MAX_CHARS`` characters, so both text boxes are equally wide) and its
   horizontal extent is measured; the "Binary Covariates" legend is then
-  expanded to exactly that extent (``mode='expand'``), so all three boxes
-  share the same left and right edge.  The vertical positions are measured
-  too (legend height, text-box height), so the boxes never overlap whatever
-  the font metrics are.
+  expanded to exactly that extent (:func:`_draw_cate_column_legend`), so all
+  three boxes share the same left and right edge.  The vertical positions are
+  measured too (legend height, text-box height), so the boxes never overlap
+  whatever the font metrics are.
 
   Args:
     layout: The dict returned by :func:`_cate_matrix_figure`.
@@ -1395,32 +1539,7 @@ def _draw_cate_right_column(layout, handles, labels, eq_lines, stats_lines):
   # 2) Legend expanded to the text-box width, anchored at the very top; its
   #    rendered height decides where the equation box goes.
   if handles:
-    # Labels longer than the box (many binary covariates) wrap onto further
-    # lines instead of running past the box edge.  The handle, its padding
-    # and the box padding take about 7 monospace characters, so the visible
-    # text is wrapped 8 characters short of the box width.
-    label_w = max_chars - 8
-    padded_labels = [
-        '\n'.join(line.ljust(label_w) for line in _wrap_mono(lbl, label_w))
-        for lbl in labels
-    ]
-    leg = ax_right.legend(
-        handles,
-        padded_labels,
-        loc='upper left',
-        bbox_to_anchor=(x0, 0.0, x1 - x0, 1.0),
-        bbox_transform=ax_right.transAxes,
-        mode='expand',
-        borderaxespad=0.0,
-        title='Binary Covariates',
-        prop={'family': 'monospace', 'size': mono_fs},
-        facecolor='lightgray',
-        edgecolor='black',
-        borderpad=0.5,
-        fancybox=True,
-    )
-    plt.setp(leg.get_title(), family='monospace', fontsize=mono_fs + 2)
-    leg._legend_box.align = 'left'  # pylint: disable=protected-access
+    leg = _draw_cate_column_legend(layout, handles, labels, (x0, x1))
     # The legend lays itself out at draw time; draw once to measure it.
     fig.canvas.draw()
     leg_ext = leg.get_window_extent(renderer=renderer)
@@ -1439,138 +1558,6 @@ def _draw_cate_right_column(layout, handles, labels, eq_lines, stats_lines):
   )
 
 
-# Legend of the single-row response chart (proportional font, under the row
-# of cells) and the gap kept between the x labels and the legend box.
-_CATE_ROW_LEGEND_FS = 22.0
-_CATE_ROW_LEGEND_GAP_IN = 0.25
-
-
-def _legend_columns(labels, fontsize, width_in):
-  """Columns of a horizontal legend so that it fits ``width_in`` inches.
-
-  matplotlib lays the entries out column-major (the first columns take the
-  remainder), so the legend is as wide as the sum over its columns of their
-  widest entry: handle, handle pad and column spacing (4.8 em at matplotlib's
-  defaults) plus the measured text width.
-
-  Args:
-    labels: Legend labels.
-    fontsize: Legend font size in points.
-    width_in: Available width in inches.
-
-  Returns:
-    ``(ncol, nrows)``: the largest number of columns that fits (at least 1)
-    and the resulting number of rows.
-  """
-  n = len(labels)
-  if n == 0:
-    return 1, 0
-  entry_pad_in = 4.8 * fontsize / 72.0
-  widths = [entry_pad_in + _text_width_in(lbl, fontsize) for lbl in labels]
-  for ncol in range(n, 0, -1):
-    base, rem = divmod(n, ncol)
-    total, start = 0.0, 0
-    for c in range(ncol):
-      size = base + (1 if c < rem else 0)
-      total += max(widths[start : start + size])
-      start += size
-    if total <= width_in:
-      return ncol, base + (1 if rem else 0)
-  return 1, n
-
-
-def _cate_row_figure(n_cells, title, cell_texts, legend_labels):
-  """Creates the single-row figure of the CATE response curves.
-
-  One square cell per treatment plus the trailing "total" cell, side by side
-  (:func:`_cate_cell_geometry` without the colorbar gutter: same cell size,
-  fonts, label wrapping and margins as the scatter matrix), and a horizontal
-  legend centred under the row.  There is no right-hand text column: beside
-  a single row of cells it would have to shrink to an unreadable size, and
-  the CATE equations with their statistics are in the scatter matrix right
-  above this chart in the report.
-
-  Args:
-    n_cells: Number of cells (treatments + 1).
-    title: Figure suptitle.
-    cell_texts: The raw cell labels (see :func:`_cate_response_cell_texts`).
-    legend_labels: The legend labels; they decide the height reserved for the
-      legend under the cells.
-
-  Returns:
-    A dict with ``fig``, ``axes`` (1 x ``n_cells`` array), ``cell_in`` (edge
-    of a cell in inches), ``legend_fs`` (legend font size),
-    ``legend_width_in`` (width available to the legend) and
-    ``legend_anchor`` (figure fraction of the legend's bottom centre).
-  """
-  geom = _cate_cell_geometry(n_cells, cell_texts, colorbar=False)
-  cell_in = geom['cell_in']
-  fig_width = geom['grid_width']
-  cells_width = fig_width - geom['left_in'] - geom['right_in']
-  fs = _CATE_ROW_LEGEND_FS
-  _, nrows = _legend_columns(legend_labels, fs, cells_width)
-  # Height reserved for the legend: its title and box padding (measured 1.9
-  # em at matplotlib's defaults), ``nrows`` entries (1.55 em each incl. the
-  # row spacing), a small allowance on both, and the gap to the x labels.
-  legend_in = (nrows * 1.6 + 2.2) * fs / 72.0 + _CATE_ROW_LEGEND_GAP_IN
-  fig_height = geom['top_in'] + cell_in + geom['bottom_in'] + legend_in
-  fig, axes = plt.subplots(
-      1,
-      n_cells,
-      figsize=(fig_width, fig_height),
-      squeeze=False,
-      # Explicit margins: ``tight_layout`` mismeasures axes that carry a forced
-      # box aspect, which lets neighbouring columns overlap.
-      gridspec_kw={
-          'left': geom['left_in'] / fig_width,
-          'right': 1 - geom['right_in'] / fig_width,
-          'top': 1 - geom['top_in'] / fig_height,
-          'bottom': (geom['bottom_in'] + legend_in) / fig_height,
-          'wspace': geom['wspace'],
-      },
-  )
-  fig.suptitle(title, fontsize=_CATE_SUPTITLE_FS, wrap=True, y=0.98)
-  return {
-      'fig': fig,
-      'axes': axes,
-      'cell_in': cell_in,
-      'legend_fs': fs,
-      'legend_width_in': cells_width,
-      'legend_anchor': (
-          (geom['left_in'] + cells_width / 2.0) / fig_width,
-          0.15 / fig_height,
-      ),
-  }
-
-
-def _draw_cate_row_legend(layout, handles, labels):
-  """Draws the horizontal legend under the row of cells.
-
-  Args:
-    layout: The dict returned by :func:`_cate_row_figure`.
-    handles: Legend handles (line and patch artists), may be empty.
-    labels: Legend labels (one per handle).
-  """
-  if not handles:
-    return
-  fs = layout['legend_fs']
-  ncol, _ = _legend_columns(labels, fs, layout['legend_width_in'])
-  layout['fig'].legend(
-      handles,
-      labels,
-      loc='lower center',
-      bbox_to_anchor=layout['legend_anchor'],
-      ncol=ncol,
-      title='Binary Covariates',
-      prop={'size': fs},
-      title_fontsize=fs + 2,
-      facecolor='lightgray',
-      edgecolor='black',
-      fancybox=True,
-      borderaxespad=0.0,
-  )
-
-
 def _style_cate_cell(layout, ax, x_label, y_label, title):
   """Square cell, labels and grid shared by both CATE charts.
 
@@ -1579,8 +1566,7 @@ def _style_cate_cell(layout, ax, x_label, y_label, title):
   nor run out of the figure.
 
   Args:
-    layout: The dict returned by :func:`_cate_matrix_figure` or
-      :func:`_cate_row_figure`.
+    layout: The dict returned by :func:`_cate_matrix_figure`.
     ax: The cell axes.
     x_label: Raw x label.
     y_label: Raw y label.
@@ -1599,6 +1585,43 @@ def _style_cate_cell(layout, ax, x_label, y_label, title):
   ax.grid(True, linestyle=':', alpha=0.5)
 
 
+# Blank margin kept under the lowest artist of a CATE chart whose figure grew
+# for its text column and is saved without the unused space below.
+_CATE_TRIM_MARGIN_IN = 0.3
+
+
+def _save_cate_figure(layout, out_path):
+  """Saves a CATE chart, without the unused bottom of a figure that grew.
+
+  A figure that grew for its text column (:func:`_cate_matrix_figure`) is as
+  tall as the estimate of that column.  The estimate is on the safe side, so
+  blank space is left under the column.  Such a figure is saved from its top
+  down to its lowest artist plus a small margin; any other figure is saved
+  whole.
+
+  Args:
+    layout: The dict returned by :func:`_cate_matrix_figure`.
+    out_path: Destination png path.
+  """
+  fig = layout['fig']
+  bbox_inches = None
+  if layout['grew']:
+    # The legend lays itself out at draw time; draw once to measure it.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax_right = layout['ax_right']
+    boxes = [ax.get_tightbbox(renderer) for ax in layout['axes'].flat]
+    boxes.extend(text.get_window_extent(renderer) for text in ax_right.texts)
+    if ax_right.get_legend() is not None:
+      boxes.append(ax_right.get_legend().get_window_extent(renderer))
+    lowest_in = min(box.y0 for box in boxes) / fig.dpi
+    bbox_inches = mtransforms.Bbox([
+        [0.0, max(0.0, lowest_in - _CATE_TRIM_MARGIN_IN)],
+        [fig.get_figwidth(), fig.get_figheight()],
+    ])
+  plt.savefig(out_path, dpi=200, bbox_inches=bbox_inches)
+
+
 def plot_cate_scatter_matrix(
     df_1a_consolidated,
     d_cols,
@@ -1610,11 +1633,14 @@ def plot_cate_scatter_matrix(
 ):
   """Plots a scatter matrix showing CATE estimations against covariates.
 
-  One square cell per (treatment, continuous covariate) pair plus a trailing
-  "total" row; the dots are coloured by the binary-covariate combination
-  ("Binary Covariates" legend) and the background contour by the continuous
-  covariate of the column.  The right-hand column carries the legend, the
-  estimated CATE functions and their p-values / standard errors.
+  One square cell per (treatment, continuous covariate) pair; the dots are
+  coloured by the binary-covariate combination ("Binary Covariates" legend)
+  and the background contour by the continuous covariate of the column.  With
+  several treatments a trailing "total" row follows (the summed treatments
+  against the total incremental KPI); with one treatment that row would
+  repeat the row of the treatment and is left out.  The right-hand column
+  carries the legend, the estimated CATE functions and their p-values /
+  standard errors.
 
   Args:
     df_1a_consolidated: The consolidated frame.
@@ -1626,10 +1652,14 @@ def plot_cate_scatter_matrix(
     cate_stats_dict: Optional ``{treatment: {"coef", "pvalue", "stderr"}}``.
 
   Returns:
-    ``{(row, col): (xlim, ylim)}`` of every cell (row ``len(d_cols)`` is the
-    total row): the axis scales the chart was saved with.
+    A dict with ``axis_limits`` -- ``{(row, col): (xlim, ylim)}`` of every cell
+    (with several treatments, row ``len(d_cols)`` is the total row), the axis
+    scales the chart was saved with -- and ``legend_fontsize``, the font size
+    of the "Binary Covariates" legend in points, which
+    :func:`plot_cate_response_curves` takes so that its legend matches.
   """
-  n_rows = len(d_cols) + 1
+  draws_total = _draws_total(d_cols)
+  n_rows = len(d_cols) + int(draws_total)
   n_cols = len(cont_cols) if cont_cols else 1
   patterns, unique_colors = _binary_patterns(df_1a_consolidated, bin_cols)
   cmap = plt.get_cmap('tab10')
@@ -1706,25 +1736,28 @@ def plot_cate_scatter_matrix(
           f'Grouped by: {cont_col}' if cont_cols else None,
       )
 
-  total_input = (
-      df_1a_consolidated[[
-          c for c in d_cols if not re.search(r'_l\d+$', c, flags=re.IGNORECASE)
-      ]]
-      .sum(axis=1)
-      .values
-  )
-  total_kpi = df_1a_consolidated['total_estimated_incremental_KPI'].values
-  for j, cont_col in enumerate(cont_cols or ['dummy']):
-    ax = axes[-1, j]
-    _contour(ax, total_input, total_kpi, cont_col, j == n_cols - 1)
-    _dots(ax, total_input, total_kpi, with_label=False)
-    _style_cate_cell(
-        layout,
-        ax,
-        'Total Treatment (Excl. Lags)',
-        'Total Incremental KPI',
-        None,
+  if draws_total:
+    total_input = (
+        df_1a_consolidated[[
+            c
+            for c in d_cols
+            if not re.search(r'_l\d+$', c, flags=re.IGNORECASE)
+        ]]
+        .sum(axis=1)
+        .values
     )
+    total_kpi = df_1a_consolidated['total_estimated_incremental_KPI'].values
+    for j, cont_col in enumerate(cont_cols or ['dummy']):
+      ax = axes[-1, j]
+      _contour(ax, total_input, total_kpi, cont_col, j == n_cols - 1)
+      _dots(ax, total_input, total_kpi, with_label=False)
+      _style_cate_cell(
+          layout,
+          ax,
+          'Total Treatment (Excl. Lags)',
+          'Total Incremental KPI',
+          None,
+      )
 
   handles, labels = axes[0, 0].get_legend_handles_labels()
   _draw_cate_right_column(layout, handles, labels, eq_lines, stats_lines)
@@ -1733,9 +1766,9 @@ def plot_cate_scatter_matrix(
       (i, j): (axes[i, j].get_xlim(), axes[i, j].get_ylim())
       for i, j in np.ndindex(n_rows, n_cols)
   }
-  plt.savefig(out_path, dpi=200)
+  _save_cate_figure(layout, out_path)
   plt.close()
-  return axis_limits
+  return {'axis_limits': axis_limits, 'legend_fontsize': layout['mono_fs']}
 
 
 # Quantiles of the 95% prediction interval drawn around every response curve,
@@ -1833,26 +1866,31 @@ def plot_cate_response_curves(
     bin_cols,
     out_path,
     response_specs=None,
+    legend_fontsize=None,
 ):
-  """Plots the fitted response curve of every treatment in a single row.
+  """Plots the fitted response curve of every treatment.
 
-  The companion of :func:`plot_cate_scatter_matrix`: one square cell per
-  treatment plus a trailing "total" cell, side by side (``1 x (treatments +
-  1)``; the curves do not depend on the continuous CATE covariates, so there
-  is no column per covariate), with the same cell size, fonts and axis labels
-  as the scatter matrix.  Instead of the dots every cell shows, per
-  binary-covariate combination (same colours as the dots, translucent), the
-  response curve ``T -> incremental KPI`` in the ORIGINAL treatment units:
-  the saturation curve ``theta_g * fbar(T / c_g; alpha_hat, T_ref)`` of the
-  group when a saturation family is in force for the treatment, the straight
-  line ``theta_g * T`` otherwise (see :func:`_fit_group_response`).  Every
-  curve is wrapped in its 95% prediction interval (lighter fill of the same
+  The companion of :func:`plot_cate_scatter_matrix`, drawn on the same
+  layout: one square cell per treatment, stacked in one column (the curves do
+  not depend on the continuous CATE covariates, so there is no column per
+  covariate), and the legend in the right-hand column, with the same cell
+  size, fonts and axis labels as the scatter matrix.  With several treatments
+  a trailing "total" cell follows (the summed treatments against the total
+  incremental KPI); with one treatment that cell would repeat the cell of
+  the treatment and is left out.
+
+  Instead of the dots every cell shows, per binary-covariate combination
+  (same colours as the dots, translucent), the response curve
+  ``T -> incremental KPI`` in the ORIGINAL treatment units: the saturation
+  curve ``theta_g * fbar(T / c_g; alpha_hat, T_ref)`` of the group when a
+  saturation family is in force for the treatment, the straight line
+  ``theta_g * T`` otherwise (see :func:`_fit_group_response`).  Every curve
+  is wrapped in its 95% prediction interval (lighter fill of the same
   colour): the 2.5% - 97.5% range of the group's row-level response curves,
   i.e. of the implied row slopes ``theta_i = KPI_i / f_i``, whose spread
   inside a binary group comes from the continuous CATE covariates (see
-  :func:`_response_band`).  The "total" cell reuses the treatment's curve
-  with a single treatment and falls back to a per-group straight-line fit
-  otherwise.
+  :func:`_response_band`).  The "total" cell shows a per-group straight-line
+  fit.
 
   Every curve covers its own observed treatment range ``[0, max T]`` and all
   cells share ONE axis scale from the origin (the same x and y limits, wide
@@ -1860,9 +1898,10 @@ def plot_cate_response_curves(
   curve or band), so the treatments and the total are comparable at a glance.
   Each cell names its response in a small note in the lower-right corner,
   the area the curves rising from the origin leave clear.  The legend (group
-  colours and the band) sits under the row; the CATE equations and their
-  statistics are not repeated here (they are in the scatter matrix right
-  above this chart in the report).
+  colours and the band) takes the font size of the scatter matrix's legend
+  (``legend_fontsize``); the CATE equations and their statistics are not
+  repeated here (they are in the scatter matrix next to this chart in the
+  report).
 
   Args:
     df_1a_consolidated: The consolidated frame.
@@ -1873,23 +1912,33 @@ def plot_cate_response_curves(
       "divisor_row": per-row divisor c_i, "curve_fn": callable mapping the
       normalized treatment T / c to fbar, "label": str}}`` for the treatments
       under a saturation family; treatments missing from it are linear.
+    legend_fontsize: Font size of the legend entries in points (the legend
+      title is 2 pt larger).  Pass the ``legend_fontsize`` returned by
+      :func:`plot_cate_scatter_matrix` so that the two legends match; ``None``
+      uses the size of that legend before any shrinking (22 pt).
 
   Returns:
     ``{treatment: {group label: theta_g}}`` of the fitted group slopes.
   """
   response_specs = response_specs or {}
-  n_cells = len(d_cols) + 1
+  draws_total = _draws_total(d_cols)
   patterns, unique_colors = _binary_patterns(df_1a_consolidated, bin_cols)
   cmap = plt.get_cmap('tab10')
   color_map = {val: cmap(i % 10) for i, val in enumerate(unique_colors)}
 
-  layout = _cate_row_figure(
-      n_cells,
+  # The figure of the scatter matrix with one column of cells: the cells and
+  # the legend take the places of its rows and of its legend.
+  layout = _cate_matrix_figure(
+      len(d_cols) + int(draws_total),
+      1,
+      len(unique_colors) + 1,  # the groups and the band
+      [],
+      [],
       'CATE Response Curves: Treatment vs Incremental Effect',
       _cate_response_cell_texts(d_cols),
-      list(unique_colors) + [_RESPONSE_BAND_LABEL],
+      mono_fs=legend_fontsize,
   )
-  axes = layout['axes'][0]
+  axes = layout['axes'][:, 0]
   n = len(df_1a_consolidated)
   fitted = {}
   # Extent of everything drawn, over all cells: the shared axis scale.
@@ -1984,32 +2033,29 @@ def plot_cate_response_curves(
     )
     _response_note(ax, (spec or {}).get('label') or 'linear')
 
-  total_input = (
-      df_1a_consolidated[[
-          c for c in d_cols if not re.search(r'_l\d+$', c, flags=re.IGNORECASE)
-      ]]
-      .sum(axis=1)
-      .values.astype(float)
-  )
-  total_kpi = (
-      df_1a_consolidated['total_estimated_incremental_KPI'].values.astype(float)
-  )
-  total_spec = response_specs.get(d_cols[0]) if len(d_cols) == 1 else None
-  total_label = (
-      (total_spec or {}).get('label') or 'linear'
-      if len(d_cols) == 1
-      else 'linear fit (sum of treatments)'
-  )
-  ax = axes[-1]
-  _curves(ax, total_input, total_kpi, total_spec, _x_grid(total_input), None)
-  _style_cate_cell(
-      layout,
-      ax,
-      'Total Treatment (Excl. Lags)',
-      'Total Incremental KPI',
-      _TOTAL_CELL_TITLE,
-  )
-  _response_note(ax, total_label)
+  if draws_total:
+    total_input = (
+        df_1a_consolidated[[
+            c
+            for c in d_cols
+            if not re.search(r'_l\d+$', c, flags=re.IGNORECASE)
+        ]]
+        .sum(axis=1)
+        .values.astype(float)
+    )
+    total_kpi = df_1a_consolidated[
+        'total_estimated_incremental_KPI'
+    ].values.astype(float)
+    ax = axes[-1]
+    _curves(ax, total_input, total_kpi, None, _x_grid(total_input), None)
+    _style_cate_cell(
+        layout,
+        ax,
+        'Total Treatment (Excl. Lags)',
+        'Total Incremental KPI',
+        _TOTAL_CELL_TITLE,
+    )
+    _response_note(ax, 'linear fit (sum of treatments)')
 
   # One scale from the origin for every cell: the x axis reaches the largest
   # treatment (normally the total), the y axis the highest curve or band, each
@@ -2042,9 +2088,9 @@ def plot_cate_response_curves(
       mpatches.Patch(facecolor='grey', edgecolor='none', alpha=0.35)
   )
   labels.append(_RESPONSE_BAND_LABEL)
-  _draw_cate_row_legend(layout, handles, labels)
+  _draw_cate_column_legend(layout, handles, labels)
 
-  plt.savefig(out_path, dpi=200)
+  _save_cate_figure(layout, out_path)
   plt.close()
   return fitted
 
