@@ -40,6 +40,11 @@ ESTIMATION_SAMPLE_COL = 'estimation_sample'
 FITTED_SAMPLE_LABEL = 'D_inf'
 SCORED_SAMPLE_LABEL = 'D_sel'
 
+# Working column that carries `theta(X)` in KPI units through the assembly of
+# the fitted and the scored rows; `run` returns it as `theta_kpi` and removes
+# it from `df_1a`.
+_THETA_KPI_COL = '_theta_kpi_'
+
 # The two hyperparameter policies of Phases 1-3.
 HPARAM_POLICY_GLOBAL = 'global'
 HPARAM_POLICY_PER_FOLD = 'per_fold'
@@ -368,7 +373,13 @@ class DoubleMLPipeline:
         here, exactly as before.
 
     Returns:
-      ``{'model_name', 'df_1a', 'metrics_1c', 'model_obj', 'cate_coef_dict'}``.
+      ``{'model_name', 'df_1a', 'metrics_1c', 'model_obj', 'cate_coef_dict',
+      'theta_kpi'}``.  ``theta_kpi`` is a Series on the index of ``df_1a``:
+      the CATE ``theta(X)`` of the row in KPI units, i.e. the increment of
+      ``Y`` per unit of the treatment variable ``D``.  The incremental KPI of
+      a row is ``theta_kpi`` times the distance of ``D`` from its value at
+      zero treatment, so ``theta_kpi`` is known for every row whereas the
+      incremental KPI of a row without treatment is 0 whatever ``theta(X)``.
     """
     if len(df_orig) < 1000 and self.covariates_for_cate:
       warnings.warn(
@@ -564,6 +575,15 @@ class DoubleMLPipeline:
         param_source_col=self.y_col,
         is_difference=True,
     )
+    # theta(X) of the row in KPI units: like the incremental KPI a difference
+    # of two outcomes, but known for every row, also where the treatment is 0.
+    df_norm['theta_norm'] = conf_int['effect'].values
+    df_results[_THETA_KPI_COL] = scaler.inverse_transform_column(
+        df_norm,
+        'theta_norm',
+        param_source_col=self.y_col,
+        is_difference=True,
+    )
 
     n_fitted = int(len(df_results))
     n_scored = 0
@@ -584,6 +604,7 @@ class DoubleMLPipeline:
       df_results = pd.concat([df_results, df_scored], axis=0)
       if row_order is not None:
         df_results = df_results.loc[row_order]
+    theta_kpi = df_results.pop(_THETA_KPI_COL)
 
     total_input = df_results[self.d_col].sum()
     total_kpi = df_results[kpi_col].sum()
@@ -684,6 +705,7 @@ class DoubleMLPipeline:
         'metrics_1c': metrics_1c,
         'model_obj': dml_model,
         'cate_coef_dict': cate_coef_dict,
+        'theta_kpi': theta_kpi,
     }
 
   def _score_held_out_rows(
@@ -707,7 +729,9 @@ class DoubleMLPipeline:
       models (every fold model was trained without these rows, so this is an
       honest out-of-sample prediction);
     * ``estimated_incremental_KPI`` is ``(T_norm - zero_norm) * effect``
-      inverse-transformed with the fitted scaler parameters.
+      inverse-transformed with the fitted scaler parameters;
+    * ``theta(X)`` in KPI units is ``effect`` inverse-transformed the same
+      way, in the working column that :meth:`run` returns as ``theta_kpi``.
 
     Args:
       dml_model: The fitted ``DoubleMLPLR``.
@@ -773,6 +797,11 @@ class DoubleMLPipeline:
     )
     df_out[kpi_upper] = scaler_s.inverse_transform_column(
         df_norm_s, 'estimated_sales_97.5%', param_source_col=self.y_col,
+        is_difference=True,
+    )
+    df_norm_s['theta_norm'] = conf_int_score['effect'].values
+    df_out[_THETA_KPI_COL] = scaler_s.inverse_transform_column(
+        df_norm_s, 'theta_norm', param_source_col=self.y_col,
         is_difference=True,
     )
     df_out[ESTIMATION_SAMPLE_COL] = SCORED_SAMPLE_LABEL

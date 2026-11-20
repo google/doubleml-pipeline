@@ -31,9 +31,9 @@
   (``extra_tree``, ``xgb_limitdepth``) must not collide.
 * The Phase 0 progress display (the eight display items, their order and
   formats), Diag6 (unit consistency of T_ref at the Phase 1 hand-over; the
-  mismatch case stops ``run_full_pipeline`` before Phase 1 starts) and Phase
-  1-3 scaler filtering + Phase 4 KPI-unit theta recovery without double
-  scaling.
+  mismatch case stops ``run_full_pipeline`` before Phase 1 starts) and the
+  Phase 1-3 scaler filtering that keeps a saturated treatment from being
+  scaled twice.
 
 Nothing here runs a complete pipeline: the full ``run_full_pipeline`` guards
 live in test_workflow_e2e.py, the spec acceptance tests in test_acceptance.py
@@ -1448,7 +1448,7 @@ class _StopAfterPhase1InputsError(Exception):
   """Raised by the spy that cuts a run short once Phase 1 has its inputs."""
 
 
-class Phase1ScalerAndThetaTest(unittest.TestCase):
+class Phase1ScalerTest(unittest.TestCase):
   """Regression tests preventing double-scaling of saturated treatments."""
 
   # pylint: disable=protected-access
@@ -1654,99 +1654,6 @@ class Phase1ScalerAndThetaTest(unittest.TestCase):
         df_orig_lin["population"] * prep_lin.df_norm["spend"]
     )
     self.assertLess(float(ratio_per_pop.std()), 1e-10)
-
-  def test_compute_theta_for_optimization_handles_pop_scaled_y_and_zero_spend(
-      self,
-  ):
-    """T = 0 rows recover population-proportional theta when Y is pop-scaled."""
-    rng = np.random.default_rng(11)
-    pops = [100.0, 200.0, 1000.0, 5000.0]
-    rows = []
-    for g, pop in enumerate(pops):
-      for w in range(20):
-        x1 = float(rng.normal())
-        spend = 0.0 if w < 4 else float(pop * rng.gamma(2.0, 1.0))
-        rows.append({
-            "date": pd.Timestamp("2022-01-03") + pd.Timedelta(weeks=w),
-            "geo": f"G{g}",
-            "item": "I0",  # Same item shared across all populations.
-            "spend": spend,
-            "X1": x1,
-            "sales": 100.0 * pop,
-            "population": pop,
-        })
-    df_est = pd.DataFrame(rows)
-    df_fit = df_est.iloc[:60].copy()
-
-    with tempfile.TemporaryDirectory() as out_dir:
-      orch = workflow.CausalWorkflowOrchestrator(
-          y_col="sales",
-          d_cols=["spend"],
-          x_cols_list=[["X1"]],
-          ml_models_y=["rf"],
-          ml_models_t=["rf"],
-          n_folds_list=[2],
-          output_dir=out_dir,
-          covariates_for_cate_list=[["X1"]],
-          cate_structure_list=["X1"],
-          geo_col="geo",
-          item_col="item",
-          saturation_config={"saturation": {"family": "power"}},
-      )
-      orch._alpha_hat["spend"] = 0.5
-      orch._selected_family["spend"] = "power"
-      orch._t_ref["spend"] = 4.0
-      div_info = alpha_selection.resolve_treatment_divisor(
-          scalers.CausalDataScaler(
-              population_median_normalize_cols=["spend", "sales"],
-              standardize_cols=["X1"],
-              population_col="population",
-          ),
-          "spend",
-          df_fit,
-      )
-      orch._treatment_divisor["spend"] = pd.Series(
-          df_est["population"].to_numpy() * div_info.constant,
-          index=df_est.index,
-      )
-
-      phase1_scaler = scalers.CausalDataScaler(
-          population_median_normalize_cols=["sales"],
-          standardize_cols=["X1"],
-          population_col="population",
-      )
-      df_fit_norm = phase1_scaler.fit_transform(df_fit)
-      del df_fit_norm
-      df_all_norm = phase1_scaler.transform(df_est)
-
-      # True CATE on Y_norm scale: beta0 + beta1 * X1_norm.
-      beta0, beta1 = 0.2, 0.05
-      effect_norm = beta0 + beta1 * df_all_norm["X1"].to_numpy()
-      m_y = phase1_scaler.pop_median_params_["sales"]["median_val_per_pop"]
-      true_theta_kpi = effect_norm * m_y * df_est["population"].to_numpy()
-      f_values = saturation.normalized_saturation(
-          orch._normalized_treatment("spend", df_est), "power", 0.5, 4.0
-      )
-      df_1a = pd.DataFrame(
-          {
-              "estimated_incremental_KPI_spend": true_theta_kpi * f_values,
-              "spend_transformed": f_values,
-          },
-          index=df_est.index,
-      )
-      best_model_data = {
-          "df_1a": df_1a,
-          "cate_coef_dict": {
-              "Intercept_coef": beta0,
-              "X1_coef": beta1,
-          },
-      }
-      got_theta = orch._compute_theta_for_optimization(
-          "spend", 0, df_est, phase1_scaler, best_model_data
-      )
-      np.testing.assert_allclose(
-          got_theta, true_theta_kpi, rtol=1e-6, atol=1e-6
-      )
 
 
 if __name__ == "__main__":

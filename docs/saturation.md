@@ -387,8 +387,10 @@ With `optimize=True`, `simple_optimization=False`, one treatment of type
 `max sum_t theta_t fbar(T_t)  s.t.  sum_t T_t <= K',  0 <= T_t <= T_bar_t^eff`
 
 in **one KKT pass**: one allocation unit is one row (item × geo × date) inside
-`opt_periods` ∩ `opt_geos × opt_items`; `theta_t = p(X_t)' beta_hat`; the
-support cap `T_bar_t = max(Q_q(cell_t), T_t^actual)` is the
+`opt_periods` ∩ `opt_geos × opt_items`; `theta_t = p(X_t)' beta_hat` in KPI
+units is the median over the Phase 3 repetitions and is estimated for every
+unit, also one without spend; the support cap
+`T_bar_t = max(Q_q(cell_t), T_t^actual)` is the
 `optimization.cap_quantile`-quantile `q` of the **positive** actual treatment
 within the unit's geo × item cell, floored at the unit's own actual spend (the
 default `q = 1.0` is the cell maximum, i.e. the historical cap; with

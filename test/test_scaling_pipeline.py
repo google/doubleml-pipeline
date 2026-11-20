@@ -15,7 +15,7 @@
 """Scaling checks at every place where the pipeline calls the scaler.
 
 ``run_full_pipeline`` scales the data, or restores scaled values to their
-original unit, at six places:
+original unit, at five places:
 
 1. Phase 0: the divisor ``c`` of the treatment, from the numbers of ALL rows
    (``T_ref`` and Stage B's treatment are on the scale ``T / c``).
@@ -25,11 +25,13 @@ original unit, at six places:
    fitted on (``D_inf``; all rows without a ``saturation`` block) and applied
    to them and to the rows the model only scores (``D_sel``).  A treatment
    whose saturation curve was adopted is ``fbar`` and is not scaled again.
-4. The exit of Phases 1-3, fitted rows: ``Y_pred``, ``T_pred`` and the
-   incremental KPI are restored.
+4. The exit of Phases 1-3, fitted rows: ``Y_pred``, ``T_pred``, the
+   incremental KPI and the effect of the row are restored.
 5. The same for the scored rows.
-6. Phase 4: the effect handed to the saturation-aware optimizer is restored
-   to KPI units (``_compute_theta_for_optimization``).
+
+Phase 4 does not call the scaler.  The saturation-aware optimizer takes the
+effect of every row as Phases 1-3 restored it: the median over the
+repetitions, also for the rows without spend.
 
 The criterion is the same at every place: the value the pipeline works with
 equals the hand formula of the scaling strategy (test/helpers.py) applied
@@ -39,8 +41,9 @@ with the numbers of another column or of other rows.
 Places 1-5 are checked in ``run_full_pipeline`` runs that are cut short once
 the first Phase 1 model is fitted: every value the checks read exists by
 then, Phase 2 does not use the scaler and Phase 3 repeats the Phase 1
-calculation on the same scaled frames.  Place 6 is checked by calling the
-function.  The complete runs live in test_workflow_e2e.py.
+calculation on the same scaled frames.  The hand-over to the optimizer is
+checked in a run that is cut short when Phase 4 calls the optimizer.  The
+complete runs live in test_workflow_e2e.py.
 
 The runs vary
 
@@ -55,8 +58,9 @@ Scaler settings the pipeline rejects are checked to stop with their error.
 A run with a ``saturation`` block takes a few seconds (Phase 0, even without
 its chart, which these runs do not draw), the others well under a second, so
 the BUILD target is sharded.  The pytest shard plugin assigns the test cases
-round-robin, and the runs with a ``saturation`` block come first: every shard
-gets the same number of them.
+round-robin, and the cut-short runs with a ``saturation`` block come first:
+every shard gets the same number of them.  The run up to the optimizer comes
+last.
 """
 
 import contextlib
@@ -201,11 +205,13 @@ def _make_orchestrator(out_dir, d_col: str, mode: str, **extra):
     out_dir: The output directory.
     d_col: The treatment column.
     mode: The way through Phase 0 (see `_saturation_config`).
-    **extra: Further arguments of the orchestrator.
+    **extra: Further arguments of the orchestrator; `optimize` is off unless
+      given.
 
   Returns:
     The orchestrator.
   """
+  extra.setdefault("optimize", False)
   return workflow.CausalWorkflowOrchestrator(
       y_col="sales",
       d_cols=[d_col],
@@ -223,7 +229,6 @@ def _make_orchestrator(out_dir, d_col: str, mode: str, **extra):
       item_col="item",
       run_sensitivity=False,
       generate_html=False,
-      optimize=False,
       saturation_config=_saturation_config(mode),
       **extra,
   )
@@ -249,6 +254,8 @@ class _CutShortRun:
       rows, the mean of the fold models for the scored rows) and the effect
       with its confidence bounds (`effect`, `2.5 %`, `97.5 %`).
     df_1a: The per-row result frame of the model (original units).
+    theta: The effect the model result carries for every row, restored to the
+      original unit of the outcome.
   """
 
   orch: workflow.CausalWorkflowOrchestrator
@@ -258,6 +265,7 @@ class _CutShortRun:
   scaled: pd.DataFrame
   outputs: pd.DataFrame
   df_1a: pd.DataFrame
+  theta: pd.Series
 
 
 def _mean_fold_prediction(model, learner: str, d_col: str, x) -> np.ndarray:
@@ -363,6 +371,7 @@ def _run_until_first_model(
       scaled=pd.concat(scaled),
       outputs=pd.concat(outputs),
       df_1a=seen["result"]["df_1a"],
+      theta=seen["result"]["theta_kpi"],
   )
 
 
@@ -579,6 +588,19 @@ def _check_phases_1_to_3(
           ),
           f"{column}, {label}",
       )
+    # The effect of the row: the incremental KPI per unit of the treatment the
+    # model is given, a difference of two outcomes as well.
+    _assert_close(
+        run.theta.loc[rows],
+        helpers.unscale_by_hand(
+            y_strategy,
+            y_numbers,
+            outputs["effect"],
+            population,
+            is_difference=True,
+        ),
+        f"effect, {label}",
+    )
 
 
 def _id(t_strategy: str, y_strategy: str, mode: str, fitted: bool) -> str:
@@ -820,50 +842,127 @@ def test_run_stops_when_a_shifted_treatment_meets_a_saturation_family(
     _run_until_first_model(orch, df, scaler, "spend", ["X1", "X2"])
 
 
-@pytest.mark.parametrize("y_strategy", helpers.SCALING_STRATEGIES + (NONE,))
-def test_effect_for_the_optimizer_is_restored_to_kpi_units(
-    y_strategy, tmp_path
-):
-  """Place 6: the effect of every row, also of the rows without spend.
+class _StopAtTheOptimizerError(Exception):
+  """Raised by the spy that cuts a run short when Phase 4 calls the optimizer."""
 
-  The optimizer takes the effect as KPI / fbar where there is spend and from
-  the CATE coefficients -- restored to KPI units -- where there is none.
+
+def _run_until_the_optimizer(orch, df: pd.DataFrame, scaler, n_reps: int):
+  """Runs the pipeline until Phase 4 calls the saturation-aware optimizer.
+
+  Args:
+    orch: The orchestrator (`optimize=True`, saturation family adopted).
+    df: The input frame.
+    scaler: The scaler handed to `run_full_pipeline`.
+    n_reps: The number of repetitions of the model.
+
+  Returns:
+    `(prepared, coefficients, optimizer)`: the scaled frames and the CATE basis
+    the models were given, the `cate_coef_dict` of every repetition in the
+    order of the runs, and the keyword arguments of the optimizer call.
+  """
+  seen = {"coefficients": []}
+  prepare = runner.prepare_run_inputs
+  run_model = runner.DoubleMLPipeline.run
+
+  def spy_prepare(df_orig, sc, df_score, cate_cols, cate_structure):
+    seen["prepared"] = prepare(df_orig, sc, df_score, cate_cols, cate_structure)
+    return seen["prepared"]
+
+  def spy_run_model(self, *args, **kwargs):
+    result = run_model(self, *args, **kwargs)
+    seen["coefficients"].append(result["cate_coef_dict"])
+    return result
+
+  def stop_at_the_optimizer(**kwargs):
+    seen["optimizer"] = kwargs
+    raise _StopAtTheOptimizerError()
+
+  with contextlib.ExitStack() as stack:
+    stack.enter_context(
+        mock.patch.object(runner, "prepare_run_inputs", spy_prepare)
+    )
+    stack.enter_context(
+        mock.patch.object(runner.DoubleMLPipeline, "run", spy_run_model)
+    )
+    stack.enter_context(
+        mock.patch.object(
+            workflow.optimization, "optimize_saturation", stop_at_the_optimizer
+        )
+    )
+    stack.enter_context(
+        mock.patch.object(
+            flaml_dml.FlamlRegressorDoubleML, "fit", helpers.deterministic_fit
+        )
+    )
+    stack.enter_context(mock.patch.object(workflow.plots, "plot_alpha_profile"))
+    stack.enter_context(warnings.catch_warnings())
+    stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+    warnings.simplefilter("ignore")
+    with pytest.raises(_StopAtTheOptimizerError):
+      orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=n_reps)
+  return seen["prepared"], seen["coefficients"], seen["optimizer"]
+
+
+def test_optimizer_takes_the_effect_of_every_row_from_phases_1_to_3(tmp_path):
+  """Phase 4 hands the optimizer the effect Phases 1-3 have for every row.
+
+  The effect of a row is the median over the repetitions of the effect each
+  repetition has for the row: the coefficients of its model times the CATE
+  basis of the row -- the basis the model was fitted with -- restored to the
+  unit of the outcome.  A row without spend has an effect too, although its
+  incremental KPI is 0 whatever the effect.
+
+  The outcome is scaled per head and each item is sold in geos of very
+  different size, so the effect of a row without spend cannot be taken from
+  the other rows of its item.
+
+  Args:
+    tmp_path: The output directory of the run.
   """
   df = _panel()
-  assert (df["spend"] == 0).any()  # Rows the CATE coefficients have to fill.
-  fit_rows = df.index[df.index % 5 != 0]
-  strategy_of = _strategies(NONE, y_strategy)
-  scaler = _make_scaler(strategy_of).fit(df.loc[fit_rows])
-  orch = _make_orchestrator(
-      tmp_path, "spend", ADOPTED, cate_structure_list=["X1"]
+  strategy_of = _strategies(
+      "population_median_normalize", "population_median_normalize"
   )
-  t_ref = _reference_point(df["spend"])
-  orch._alpha_hat["spend"] = _EXPONENT
-  orch._selected_family["spend"] = "power"
-  orch._t_ref["spend"] = t_ref
-  # The effect of the model in scaled units, linear in the scaled X1, and
-  # the same effect in KPI units.
-  intercept, slope = 0.2, 0.05
-  _, x1_scaled = _scaled_by_hand("standardize", df, "X1", fit_rows)
+  y_strategy = strategy_of["sales"]
+  scaler = _make_scaler(strategy_of)
+  orch = _make_orchestrator(tmp_path, "spend", ADOPTED, optimize=True)
+
+  prepared, coefficients, optimizer = _run_until_the_optimizer(
+      orch, df, scaler, n_reps=3
+  )
+
+  fit_rows = prepared.df_norm.index
+  scored_rows = prepared.df_norm_score.index
+  no_spend = df.index[df["spend"] == 0]
+  assert not no_spend.intersection(fit_rows).empty
+  assert not no_spend.intersection(scored_rows).empty
+  # The effect of every repetition by hand, then the median row by row.
+  basis = pd.concat([prepared.cate_basis, prepared.cate_basis_score])
   y_numbers, _ = _scaled_by_hand(y_strategy, df, "sales", fit_rows)
-  effect_kpi = helpers.unscale_by_hand(
-      y_strategy,
-      y_numbers,
-      intercept + slope * x1_scaled,
-      df[POPULATION],
-      is_difference=True,
+  effects = []
+  for coefficients_of_run in coefficients:
+    beta = pd.Series(
+        {column: coefficients_of_run[f"{column}_coef"] for column in basis}
+    )
+    effects.append(
+        helpers.unscale_by_hand(
+            y_strategy,
+            y_numbers,
+            basis @ beta,
+            df.loc[basis.index, POPULATION],
+            is_difference=True,
+        )
+    )
+  assert len(effects) == 3
+  assert not np.allclose(effects[0], effects[1])
+  effect = pd.concat(effects, axis=1).median(axis=1).loc[df.index]
+  _assert_close(optimizer["theta"], effect, "effect handed to the optimizer")
+  # At the actual spend the objective of the optimizer, effect x fbar, is the
+  # incremental KPI of the row.
+  t_over_c = _treatment_over_divisor(df, "spend", strategy_of["spend"])
+  fbar = (t_over_c / _reference_point(t_over_c)) ** _EXPONENT
+  _assert_close(
+      optimizer["theta"] * fbar,
+      optimizer["df_1a_consolidated"]["estimated_incremental_KPI_spend"],
+      "effect x fbar at the actual spend",
   )
-  fbar = (df["spend"] / t_ref) ** _EXPONENT
-  best_model_data = {
-      "df_1a": pd.DataFrame({
-          "estimated_incremental_KPI_spend": effect_kpi * fbar,
-          "spend_transformed": fbar,
-      }),
-      "cate_coef_dict": {"Intercept_coef": intercept, "X1_coef": slope},
-  }
-
-  theta = orch._compute_theta_for_optimization(
-      "spend", 0, df, scaler, best_model_data
-  )
-
-  _assert_close(theta, effect_kpi, "effect in KPI units")

@@ -162,7 +162,13 @@ def parallel_section(workers: int, threads: int):
 
 # The keys of a run result that every repetition must carry (the
 # aggregation of workflow Phase 3 reads nothing else from repetitions >= 1).
-REP_RESULT_KEYS = ("model_name", "model_group", "metrics_1c", "cate_coef_dict")
+REP_RESULT_KEYS = (
+    "model_name",
+    "model_group",
+    "metrics_1c",
+    "cate_coef_dict",
+    "theta_kpi",
+)
 
 # Column-list attributes on CausalDataScaler iterated when extending or
 # filtering scaling configuration across pipeline phases.
@@ -204,7 +210,8 @@ def reduce_rep_result(
   is sent back to the parent process; the KPI point estimate, its lower /
   upper bounds, the treatment column and the ground-truth column (when
   present) are kept with the original index, so the median aggregation
-  (positional) and the raw-treatment restoration are unchanged.
+  (positional) and the raw-treatment restoration are unchanged.  ``theta_kpi``
+  (``theta(X)`` of every row in KPI units) is kept as it is.
 
   Args:
     res: The full ``runner.DoubleMLPipeline.run`` result (+ ``model_group``).
@@ -884,7 +891,7 @@ class CausalWorkflowOrchestrator:
     # with the fitted CATE so the per-row outputs cover the whole sample.
     self._score_frame: Optional[pd.DataFrame] = None
     # Phase 3 result per treatment (`model_name`, `model_obj`, `df_1a`,
-    # `df_1b`, `metrics_1c`, `cate_coef_dict`), populated by
+    # `df_1b`, `metrics_1c`, `cate_coef_dict`, `theta_kpi`), populated by
     # `run_full_pipeline`.  `model_obj` is the fitted estimator that is also
     # exported as `best_dml_object_<model>.pkl`; keeping it here lets callers
     # use it in-process instead of unpickling that file (unpickling can
@@ -2354,129 +2361,6 @@ class CausalWorkflowOrchestrator:
       values = divisor.reindex(index).fillna(1.0).to_numpy(dtype=float)
     return saturation_lib.raw_scale_reference(t_ref, values)
 
-  def _compute_theta_for_optimization(
-      self,
-      d_col: str,
-      idx: int,
-      df_est: pd.DataFrame,
-      scaler: scalers.CausalDataScaler,
-      best_model_data: Dict[str, Any],
-  ) -> np.ndarray:
-    """Recovers `theta_hat_t` in KPI units for the saturation-aware optimizer.
-
-    The optimizer maximises `sum_t theta_t * fbar(T_t; alpha_hat)`, so `theta`
-    must be expressed in KPI units. It is primarily recovered as
-    `KPI_t / fbar(T_t; alpha_hat)`; rows with `T_t = 0` are filled from the
-    pooled CATE coefficients evaluated on the very same basis `p(X)` that
-    Phases 1-3 used.
-
-    Args:
-      d_col: Treatment column.
-      idx: Index of `d_col` within `self.d_cols`.
-      df_est: The raw-treatment estimation frame.
-      scaler: The pipeline scaler (deep-copied before use so the caller's fitted
-        state is never mutated).
-      best_model_data: The `best_model_data_dict` entry of this channel.
-
-    Returns:
-      An array of `theta_hat_t` aligned with `df_est`'s rows.
-    """
-    frame = best_model_data.get("df_1a")
-    kpi_col = f"estimated_incremental_KPI_{d_col}"
-    if frame is None or kpi_col not in frame.columns:
-      return np.zeros(len(df_est), dtype=float)
-
-    kpi_values = (
-        pd.to_numeric(frame[kpi_col], errors="coerce").fillna(0.0).to_numpy()
-    )
-    transformed_col = f"{d_col}_transformed"
-    if transformed_col in frame.columns:
-      f_values = (
-          pd.to_numeric(frame[transformed_col], errors="coerce")
-          .fillna(0.0)
-          .to_numpy()
-      )
-    else:
-      # Normalization bridge: Phases 1-3 saw
-      # fbar(T/c; alpha_hat, T_ref), so the fallback must reproduce the same
-      # quantity, not f(T; alpha).
-      f_values = saturation_lib.normalized_saturation(
-          self._normalized_treatment(d_col, df_est),
-          self.sat_family,
-          float(self._alpha_hat.get(d_col, 1.0)),
-          self._t_ref_for(d_col),
-      )
-
-    # Reconstruct p(x)'beta on the same basis the pipeline fitted, so the
-    # T = 0 rows get a sensible theta instead of 0.
-    basis_theta = None
-    try:
-      scaler_local = copy.deepcopy(scaler)
-      is_fitted = any(
-          bool(getattr(scaler_local, attr, None))
-          for attr in (
-              "standard_params_",
-              "min_max_params_",
-              "median_params_",
-              "pop_standard_params_",
-              "pop_median_params_",
-          )
-      )
-      pop_col = getattr(scaler_local, "population_col", None)
-      if is_fitted:
-        raw_pop = getattr(scaler_local, "raw_population_", None)
-        if pop_col and pop_col in df_est.columns:
-          extra_pop = df_est[pop_col]
-          if raw_pop is None:
-            scaler_local.raw_population_ = extra_pop.copy()
-          else:
-            missing = extra_pop.loc[~extra_pop.index.isin(raw_pop.index)]
-            if not missing.empty:
-              scaler_local.raw_population_ = pd.concat([raw_pop, missing])
-        df_norm = scaler_local.transform(df_est)
-      else:
-        df_norm = scaler_local.fit_transform(df_est)
-      basis_builder = self._cate_basis_builder(
-          d_col,
-          self.x_cols_list[idx],
-          self.covariates_for_cate_list[idx],
-          self.cate_structure_list[idx],
-      )
-      basis_df = basis_builder(df_norm, df_est)
-      basis_theta = optimization.compute_basis_theta(
-          basis_df, best_model_data.get("cate_coef_dict", {}) or {}
-      )
-      if basis_theta is not None:
-        # Express basis_theta in KPI units (including per-row population scale
-        # when y_col is population-normalized/standardized) so it matches
-        # ratio = kpi_values / f_values across rows with varying population.
-        theta_df = pd.DataFrame(
-            {"_basis_theta": basis_theta}, index=df_est.index
-        )
-        if pop_col and pop_col in df_est.columns:
-          theta_df[pop_col] = df_est[pop_col]
-        basis_theta = scaler_local.inverse_transform_column(
-            theta_df,
-            "_basis_theta",
-            param_source_col=self.y_col,
-            is_difference=True,
-        ).to_numpy(dtype=float)
-    except Exception as exc:  # pylint: disable=broad-except
-      warnings.warn(
-          f"Could not rebuild the CATE basis for '{d_col}' ({exc}); falling"
-          " back to the KPI/f ratio only."
-      )
-
-    group_keys = None
-    for key_col in (self.item_col, self.geo_col):
-      if key_col and key_col in df_est.columns:
-        group_keys = df_est[key_col]
-        break
-
-    return optimization.estimate_theta_kpi_units(
-        kpi_values, f_values, basis_theta, group_keys
-    )
-
   def _run_phase0(
       self, df: pd.DataFrame, scaler: scalers.CausalDataScaler
   ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -3559,7 +3443,7 @@ class CausalWorkflowOrchestrator:
 
     Returns:
       The FULL run result (``model_name``, ``df_1a``, ``metrics_1c``,
-      ``model_obj``, ``cate_coef_dict``); Phase 3 reuses it as
+      ``model_obj``, ``cate_coef_dict``, ``theta_kpi``); Phase 3 reuses it as
       repetition 0 of the candidate (same seed ``random_state = 1`` and the
       same splits as that repetition).
     """
@@ -3676,9 +3560,9 @@ class CausalWorkflowOrchestrator:
       hparams_t: global search result of the T learner.
       learner_n_jobs: ``h`` threads per learner fit.
       reduced: Return only ``model_name``, ``model_group``,
-        ``metrics_1c``, ``cate_coef_dict`` and the KPI / treatment /
-        ground-truth columns of ``df_1a`` (repetitions >= 1).  False keeps
-        the full objects.
+        ``metrics_1c``, ``cate_coef_dict``, ``theta_kpi`` and the KPI /
+        treatment / ground-truth columns of ``df_1a`` (repetitions >= 1).
+        False keeps the full objects.
       done_name: Name of the ``.done`` marker (``rep_<rep>.done`` when None).
 
     Returns:
@@ -4684,6 +4568,20 @@ class CausalWorkflowOrchestrator:
         best_model_data["df_1a"][kpi_lower] = tilde_theta - 1.96 * tilde_sigma
         best_model_data["df_1a"][kpi_upper] = tilde_theta + 1.96 * tilde_sigma
 
+        # theta(X) of every row in KPI units is pooled like the KPI point
+        # estimate: the median over the repetitions, row by row.  Phase 4
+        # hands it to the saturation-aware optimizer.
+        best_model_data["theta_kpi"] = pd.Series(
+            np.nanmedian(
+                np.array([
+                    np.asarray(r["theta_kpi"], dtype=float)
+                    for r in best_group_results
+                ]),
+                axis=0,
+            ),
+            index=best_model_data["df_1a"].index,
+        )
+
       df_1b_base = metrics.aggregate_geo_item_metrics(
           best_model_data["df_1a"],
           best_model_data["model_name"],
@@ -5195,15 +5093,11 @@ class CausalWorkflowOrchestrator:
                 out_dir=opt_out_dir,
             )
           elif run_saturation_opt:
-            # theta must be in KPI units for the closed-form
-            # allocator to be comparable across rows.
-            d_idx = self.d_cols.index(d_col)
-            theta_hat = self._compute_theta_for_optimization(
-                d_col,
-                d_idx,
-                df_est,
-                phase1_scaler,
-                best_model_data_dict[d_col],
+            # theta(X) of every row in KPI units, as Phases 1-3 estimated it
+            # against fbar (the median over the repetitions).  It is known for
+            # every row, also where T = 0, and is comparable across rows.
+            theta_hat = best_model_data_dict[d_col]["theta_kpi"].to_numpy(
+                dtype=float
             )
             # Normalization bridge: alpha_hat lives on the
             # normalized treatment, but the Phase 4 budget is in raw units.

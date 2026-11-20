@@ -424,14 +424,16 @@ class ReduceRegroupTest(unittest.TestCase):
         "Y_pred": [0.0, 0.0],
         "geo": ["a", "b"],
     }, index=[7, 3])
+    theta_kpi = pd.Series([3.0, 4.0], index=[7, 3])
     res = {"model_name": "m", "model_group": "m", "metrics_1c": {"a": 1},
            "cate_coef_dict": {"Intercept_coef": 1.0}, "model_obj": object(),
-           "df_1a": frame}
+           "theta_kpi": theta_kpi, "df_1a": frame}
     reduced = workflow.reduce_rep_result(res, "spend", "truth")
     self.assertEqual(
         set(reduced), {"model_name", "model_group", "metrics_1c",
-                       "cate_coef_dict", "df_1a"}
+                       "cate_coef_dict", "theta_kpi", "df_1a"}
     )
+    self.assertIs(reduced["theta_kpi"], theta_kpi)
     self.assertEqual(
         list(reduced["df_1a"].columns),
         ["estimated_incremental_KPI_spend",

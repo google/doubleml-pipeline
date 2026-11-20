@@ -81,7 +81,7 @@ The saturation-aware part
 from collections.abc import Sequence
 import dataclasses
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -1051,101 +1051,6 @@ def plot_before_after_charts(
 
 
 _EPS = 1e-12
-
-
-def compute_basis_theta(
-    basis_df: pd.DataFrame, cate_coef_dict: Dict[str, float]
-) -> Optional[np.ndarray]:
-  """Rebuilds ``theta(x) = p(x)' beta`` from the pooled CATE coefficients.
-
-  Args:
-    basis_df: The CATE basis ``p(X)`` (columns must match the coefficient names
-      used by the existing pipeline).
-    cate_coef_dict: The pooled ``{name}_coef`` dictionary produced by Phase 3.
-
-  Returns:
-    ``theta(x)`` up to a positive scale factor, or ``None`` when the
-    coefficients cannot be matched to the basis columns.
-  """
-  if basis_df is None or not cate_coef_dict:
-    return None
-  coefs = {
-      str(k)[:-5]: float(v)
-      for k, v in cate_coef_dict.items()
-      if str(k).endswith("_coef")
-  }
-  matched = [c for c in basis_df.columns if str(c) in coefs]
-  if not matched:
-    return None
-  values = np.zeros(len(basis_df), dtype=float)
-  for col in matched:
-    values += coefs[str(col)] * np.asarray(basis_df[col], dtype=float)
-  return values
-
-
-def estimate_theta_kpi_units(
-    kpi_values: np.ndarray,
-    f_values: np.ndarray,
-    basis_theta: Optional[np.ndarray] = None,
-    group_keys: Optional[pd.Series] = None,
-) -> np.ndarray:
-  """Recovers ``theta_hat_t`` in KPI units from the Phase 3 outputs.
-
-  Under the saturation model the estimated incremental KPI of a row is
-  ``KPI_t = f(T_t; alpha_hat) * theta_hat_t`` (the pipeline multiplies the CATE
-  by the treatment, which is the *transformed* treatment here).  ``theta`` is
-  therefore ``KPI / f`` wherever ``f > 0``; rows with ``T_t = 0`` (where
-  ``f = 0`` for all three families) are recovered from the pooled CATE
-  coefficients, which are proportional to ``theta`` by construction.
-
-  Args:
-    kpi_values: ``estimated_incremental_KPI_<treatment>``.
-    f_values: ``f(T_t; alpha_hat)``.
-    basis_theta: Optional ``p(x)' beta`` (any positive scale).
-    group_keys: Optional grouping used to fill ``f = 0`` rows when the basis
-      reconstruction is unavailable.
-
-  Returns:
-    ``theta_hat_t`` expressed in KPI units.
-  """
-  kpi_values = np.asarray(kpi_values, dtype=float)
-  f_values = np.asarray(f_values, dtype=float)
-  usable = f_values > 1e-9
-  ratio = np.zeros_like(kpi_values)
-  with np.errstate(divide="ignore", invalid="ignore"):
-    ratio[usable] = kpi_values[usable] / f_values[usable]
-  ratio = np.nan_to_num(ratio, nan=0.0, posinf=0.0, neginf=0.0)
-
-  if basis_theta is not None:
-    basis_theta = np.nan_to_num(
-        np.asarray(basis_theta, dtype=float), nan=0.0, posinf=0.0, neginf=0.0
-    )
-    mask = usable & (np.abs(basis_theta) > 1e-12)
-    if np.count_nonzero(mask) >= max(5, int(0.05 * len(kpi_values))):
-      scale = float(np.median(ratio[mask] / basis_theta[mask]))
-      candidate = scale * basis_theta
-      denom = np.abs(ratio[mask]) + 1e-9
-      rel_err = float(np.median(np.abs(candidate[mask] - ratio[mask]) / denom))
-      if np.isfinite(scale) and rel_err < 0.05:
-        return candidate
-
-  if np.all(usable):
-    return ratio
-
-  filled = ratio.copy()
-  if group_keys is not None and len(group_keys) == len(ratio):
-    frame = pd.DataFrame(
-        {"g": np.asarray(group_keys), "v": ratio, "ok": usable}
-    )
-    medians = frame[frame["ok"]].groupby("g", observed=False)["v"].median()
-    for idx in np.flatnonzero(~usable):
-      filled[idx] = float(medians.get(frame["g"].iloc[idx], np.nan))
-  global_median = float(np.median(ratio[usable])) if np.any(usable) else 0.0
-  filled = np.where(np.isfinite(filled), filled, global_median)
-  filled[~usable] = np.where(
-      np.isfinite(filled[~usable]), filled[~usable], global_median
-  )
-  return np.nan_to_num(filled, nan=global_median)
 
 
 def compute_budget(

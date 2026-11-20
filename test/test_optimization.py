@@ -31,8 +31,7 @@
 * A worked example (exp, theta = (10, 5), K = 2, r = 4): exact solution
   ``T = (1.540, 0.460)``, total KPI 9.70, versus 8.65 for the abolished greedy
   rule.
-* The budget upper bound ``K`` (``compute_budget``) and the theta recovery in
-  KPI units (``estimate_theta_kpi_units``).
+* The budget upper bound ``K`` (``compute_budget``).
 * The frame-level :func:`optimization.optimize_saturation`: allocation units,
   caps by geo x item cell, ``opt_geos`` / ``opt_items``, the ``optimized_*``
   columns, the statistics columns of ``optimization_metrics.csv`` and the
@@ -947,8 +946,8 @@ class WorkedExampleTest(unittest.TestCase):
     )
 
 
-class BudgetAndThetaTest(unittest.TestCase):
-  """Budget upper bound K and theta recovery."""
+class BudgetTest(unittest.TestCase):
+  """Budget upper bound K."""
 
   def test_compute_budget_applies_the_increment(self):
     actual = np.array([10.0, 20.0, 30.0])
@@ -958,26 +957,6 @@ class BudgetAndThetaTest(unittest.TestCase):
     self.assertAlmostEqual(
         optimization.compute_budget(actual, 0.1), 66.0
     )
-
-  def test_theta_recovered_in_kpi_units(self):
-    """theta_hat_t = KPI_t / fbar(T_t) is recovered row by row in KPI units."""
-    rng = np.random.default_rng(3)
-    n = 300
-    treatment = np.where(
-        rng.random(n) < 0.2, 0.0, np.abs(rng.gamma(2.0, 30.0, size=n))
-    )
-    f_values = saturation.apply_saturation(treatment, "power", 0.5)
-    kpi = 2.5 * f_values
-    theta_hat = optimization.estimate_theta_kpi_units(
-        kpi,
-        f_values,
-        None,
-        pd.Series(np.resize(["a", "b"], n)),
-    )
-    positive = f_values > 0
-    self.assertLess(float(np.abs(theta_hat[positive] - 2.5).max()), 1e-6)
-    # Zero-treatment rows must be imputed rather than left at zero.
-    self.assertLess(float(np.abs(theta_hat[~positive] - 2.5).max()), 1e-6)
 
 
 def _frame(n_geo=3, n_items=2, n_weeks=12, seed=0):

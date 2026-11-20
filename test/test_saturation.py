@@ -55,7 +55,7 @@ The allocators and the normalization bridge:
   reported by Phase 4 stops matching the KPI Phases 1-3 estimated.
 * The profiled R-loss recovers a known alpha.
 
-The budget bound, the theta recovery and the optimizer charts live in
+The budget bound and the optimizer charts live in
 test_optimization.py; ``treatment_divisor``, the Phase 0 fit accounting and
 the FLAML time budget in test_alpha_selection.py; the default family
 resolution of the orchestrator in test_workflow.py.
@@ -964,8 +964,8 @@ class NormalizationBridgeTest(unittest.TestCase):
     super().setUp()
     rng = np.random.default_rng(0)
     self.treatment = rng.gamma(2.0, 50.0, size=500)
-    # Include exact zeros: f(0) = 0 is what makes the Phase 4 theta recovery
-    # exact, so the bridge must preserve it.
+    # Include exact zeros: f(0) = 0 (no treatment, no incremental KPI) must
+    # survive the bridge.
     self.treatment[:20] = 0.0
 
   def test_global_constant_divisor(self):
@@ -1025,7 +1025,7 @@ class NormalizationBridgeTest(unittest.TestCase):
     np.testing.assert_allclose(pow_gain, divisor**-0.5)
 
   def test_zero_treatment_stays_zero(self):
-    """`f(0) == 0` survives the rescale; Phase 4's theta recovery needs it."""
+    """`f(0) == 0` survives the rescale: no treatment, no incremental KPI."""
     for family in saturation.SUPPORTED_FAMILIES:
       with self.subTest(family=family):
         alpha_raw, gain = saturation.rescale_alpha_to_raw(

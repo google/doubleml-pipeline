@@ -525,9 +525,9 @@ module-level constant shared across runs.
 > at the start of Phase 0. Those three *shift* the treatment, so `T = 0` is no
 > longer mapped to `0`: the curve is anchored at `f(0) = 0` (a negative value
 > is evaluated as `f(T) = −f(−T)`, not clipped), so it would bend around the
-> shifted origin instead of around zero treatment, and `f(0) = 0` — the
-> identity the Phase 4 theta recovery depends on — would be lost. Covariates
-> and the outcome are unconstrained — only the treatment column is.
+> shifted origin instead of around zero treatment, and `f(0) = 0` — no
+> treatment, no incremental KPI — would be lost. Covariates and the outcome
+> are unconstrained — only the treatment column is.
 
 > [!NOTE]
 > Alpha is estimated against the **normalized** treatment `T/c`, not raw spend.
@@ -645,10 +645,14 @@ The input `df` is **never mutated**; Phase 0 works on copies throughout.
 
 After the run, `orch.best_model_data[<treatment>]` holds the Phase 3 result of
 each treatment (`model_name`, `model_obj`, `df_1a`, `df_1b`, `metrics_1c`,
-`cate_coef_dict`). `model_obj` is the fitted `DoubleMLPLR` that is also
-exported as `best_dml_object_<model>.pkl`, so in-process callers can use the
-estimator directly instead of unpickling that file (unpickling a file from
-disk can execute arbitrary code).
+`cate_coef_dict`, `theta_kpi`). `model_obj` is the fitted `DoubleMLPLR` that
+is also exported as `best_dml_object_<model>.pkl`, so in-process callers can
+use the estimator directly instead of unpickling that file (unpickling a file
+from disk can execute arbitrary code). `theta_kpi` is the CATE `theta(X)` of
+every row in KPI units — a Series on the index of `df_1a`, the median over
+the repetitions row by row. It is the `theta` Phase 4 hands to the
+saturation-aware optimizer, and it is known for every row, also where the
+treatment is 0.
 
 **Parameters:**
 
@@ -779,7 +783,7 @@ duration of the section instead.
 
 **Internal helpers exposed at module level.** The Phase 3 repetition
 reduction: `REP_RESULT_KEYS = ("model_name", "model_group", "metrics_1c",
-"cate_coef_dict")` (the keys every repetition `>= 1` must carry),
+"cate_coef_dict", "theta_kpi")` (the keys every repetition `>= 1` must carry),
 `rep_df_columns(d_col, gt_col)` (the `df_1a` columns kept for those
 repetitions), `reduce_rep_result(res, d_col, gt_col)` (drops `model_obj` and
 the other columns before a worker result is sent back) and
@@ -1164,7 +1168,12 @@ and `hparams_t` were given, `'per_fold'` otherwise.
 Executes a single DoubleML Partial Linear Regression (PLR) pipeline run.
 **Returns:** A dictionary with the keys `model_name`, `df_1a` (result
 dataframe), `metrics_1c` (execution metrics), `model_obj` (the DoubleML model
-object) and `cate_coef_dict` (CATE coefficients).
+object), `cate_coef_dict` (CATE coefficients) and `theta_kpi`. `theta_kpi` is
+a Series on the index of `df_1a`: the CATE `theta(X)` of the row in KPI
+units, i.e. the increment of `Y` per unit of the treatment variable `D`. The
+incremental KPI of a row is `theta_kpi` times the distance of `D` from its
+value at zero treatment, so `theta_kpi` is known for every row, whereas the
+incremental KPI of a row without treatment is 0 whatever `theta(X)`.
 
 **Parameters:**
 
@@ -2553,8 +2562,8 @@ normalization bridge).
 
 #### `apply_saturation(t_values, family, alpha) -> np.ndarray`
 
-Evaluates `f(T; alpha)`. All four families satisfy `f(0) = 0`, which is what
-makes the theta recovery identity in Phase 4 exact.
+Evaluates `f(T; alpha)`. All four families satisfy `f(0) = 0`: no treatment,
+no incremental KPI.
 
 | `family` | `f(T; alpha)` | `f'(T; alpha)` | Role of `alpha` | Grid variable (`T_1/2`; `T_knee` for log) |
 | :--- | :--- | :--- | :--- | :--- |
@@ -3981,30 +3990,6 @@ charts.
 -   `REALLOCATE_WITHIN = ('all', 'date')`: the values of
     `optimization.reallocate_within`.
 
-### Function: `compute_basis_theta`
-
-#### `compute_basis_theta(basis_df: pd.DataFrame, cate_coef_dict: Dict[str, float]) -> Optional[np.ndarray]`
-
-Reconstructs the per-row CATE `theta(X) = p(X)' beta` from the fitted basis
-and the pooled `{name}_coef` coefficients, **up to a positive scale factor**.
-Returns `None` when `basis_df` is `None`, `cate_coef_dict` is empty, or no
-`<name>_coef` key matches a basis column.
-
-### Function: `estimate_theta_kpi_units`
-
-#### `estimate_theta_kpi_units(kpi_values, f_values, basis_theta=None, group_keys=None) -> np.ndarray`
-
-Recovers `theta` in KPI units via the identity
-`KPI_t = theta_t * f(T_t; alpha)`:
-`theta = KPI / f` wherever `f > 1e-9`. If `basis_theta` is given and
-reproduces that ratio (median calibration `scale = median(ratio /
-basis_theta)` with a median relative error below 5 % on at least
-`max(5, 5 %)` of the rows), the calibrated `scale * basis_theta` is returned
-for **every** row. Otherwise the rows with `f = 0` (where `T = 0` for all
-four families, including `tanh`) are filled with the median ratio within
-their `group_keys` group (the global median as fallback, and when no
-`group_keys` are given).
-
 ### Function: `compute_budget`
 
 #### `compute_budget(treatment_values: np.ndarray, budget_increment: float) -> float`
@@ -4022,7 +4007,9 @@ optimization columns appended.
 
 Problem definition: one allocation unit `t` is
 one row (item × geo × date) inside `periods` and `opt_geos × opt_items`;
-`theta_t = p(X_t)' beta_hat` (the `theta` argument); the support cap
+`theta_t = p(X_t)' beta_hat` in KPI units (the `theta` argument; the
+orchestrator passes the `theta_kpi` of the Phase 3 result, which covers every
+row, also one without spend); the support cap
 `T_bar_t = max(Q_q(cell_t), T_t^actual)` is the `cap_quantile`-quantile `q` of
 the positive actual treatment within the unit's geo × item cell (over the
 whole frame; `q = 1.0`, the default, is the cell maximum) floored at the

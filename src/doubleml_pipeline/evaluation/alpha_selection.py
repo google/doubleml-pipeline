@@ -1395,8 +1395,8 @@ _DIVISIVE_TREATMENT_SCALINGS = (
 # These SHIFT the treatment, so `T = 0` is no longer mapped to 0.  The curve
 # is anchored at `f(0) = 0` (`apply_saturation` evaluates a negative value as
 # `f(T) = -f(-T)`), so it would bend around the shifted origin instead of
-# around zero treatment, and `f(0) = 0` (on which the Phase 4 theta recovery
-# depends) would no longer line up with `T = 0`.
+# around zero treatment, and `f(0) = 0` (no treatment, no incremental KPI)
+# would no longer line up with `T = 0`.
 _SHIFTING_TREATMENT_SCALINGS = (
     "standardize",
     "population_standardize",
@@ -1557,8 +1557,8 @@ def resolve_treatment_divisor(
           " treatment, so T=0 is no longer mapped to 0. The saturation curve"
           " f(T;alpha) is anchored at f(0)=0 (a negative value is evaluated"
           " as f(T) = -f(-T)), so it would bend around the shifted origin"
-          " instead of around zero treatment, and f(0)=0 (which the Phase 4"
-          " theta recovery relies on) no longer lines up with T=0. Move"
+          " instead of around zero treatment, and f(0)=0 (no treatment, no"
+          " incremental KPI) no longer lines up with T=0. Move"
           f" '{d_col}' to median_normalize_cols or"
           " population_median_normalize_cols, or disable saturation"
           " (saturation.family = None)."

@@ -1275,7 +1275,7 @@ class PopulationMedianSaturationEndToEndTest(unittest.TestCase):
       for w, d in enumerate(dates):
         x1 = float(rng.normal())
         x2 = float(rng.normal())
-        # Include ~10% zero-spend rows to exercise T = 0 theta recovery as well.
+        # Include ~10% zero-spend rows: the optimizer needs theta there too.
         if w % 10 == 0:
           spend_per_pop = 0.0
         else:
