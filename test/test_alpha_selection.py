@@ -1355,6 +1355,10 @@ class StandardErrorTest(unittest.TestCase):
     # A_1SE = {alpha : L_bar(alpha) - L_bar(alpha_hat) <= se(alpha)}.
     gap = r.mean_loss - r.rloss_min
     want = gap <= r.se_alpha
+    if not r.refined:
+      # alpha_hat is a grid point: a member by definition, whatever the
+      # rounding of its own difference.
+      want[int(np.argmin(r.mean_loss))] = True
     np.testing.assert_array_equal(np.asarray(r.one_se_set, bool), want)
     self.assertTrue(np.all(gap >= -1e-12))
 
@@ -1438,6 +1442,30 @@ class DiagnosticsTest(unittest.TestCase):
     )
     self.assertTrue(np.isnan(ratio))
     self.assertFalse(fired)
+
+  def test_one_se_set_holds_alpha_hat_despite_rounding(self):
+    """A grid point that is alpha_hat is in A_1SE whatever the rounding."""
+    # L_bar(alpha_hat) averaged over the seeds of alpha_hat alone can sit one
+    # floating-point step below the same average in `mean_loss`.
+    mean_loss = np.array([1.0, 1.2, 1.05])
+    rloss_min = float(np.nextafter(1.0, 0.0))
+    se_alpha = np.array([0.0, 0.1, 0.1])
+    np.testing.assert_array_equal(
+        alpha_selection.one_se_membership(mean_loss, rloss_min, se_alpha, 0),
+        [True, False, True],
+    )
+    # alpha_hat between grid points (Brent refinement): no point is added.
+    np.testing.assert_array_equal(
+        alpha_selection.one_se_membership(mean_loss, rloss_min, se_alpha),
+        [False, False, True],
+    )
+    # A non-finite se counts as 0.
+    np.testing.assert_array_equal(
+        alpha_selection.one_se_membership(
+            np.array([1.0, 1.0, 1.05]), 1.0, np.array([0.0, np.nan, np.inf])
+        ),
+        [True, True, False],
+    )
 
   def test_diag2_warning_only_when_family_adopted(self):
     """Diag2 is a WARNING only when a nonlinear family is adopted.

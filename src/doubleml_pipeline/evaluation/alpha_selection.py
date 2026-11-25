@@ -2163,6 +2163,41 @@ def linear_test_decision(d_bar: float, se: float, k: float) -> bool:
   return bool(d_bar < -float(k) * float(se))
 
 
+def one_se_membership(
+    mean_loss: np.ndarray,
+    rloss_min: float,
+    se_alpha: np.ndarray,
+    alpha_hat_index: Optional[int] = None,
+) -> np.ndarray:
+  """Membership of every grid point in the 1-SE set ``A_1SE`` of Diag2.
+
+  ``A_1SE = {alpha : L_bar(alpha) - L_bar(alpha_hat) <= se(alpha)}``.  When
+  ``alpha_hat`` is a grid point, its own difference and its own se are 0, so
+  it is a member by definition.  The floating-point difference need not be 0:
+  ``mean_loss`` averages the seeds of all grid points in one pass and
+  ``rloss_min`` averages the seeds of ``alpha_hat`` alone, and the two sums
+  can differ in the last bit.  ``alpha_hat_index`` therefore names the grid
+  point that is ``alpha_hat`` and makes it a member whatever the rounding.
+
+  Args:
+    mean_loss: ``(G,)`` seed-averaged loss ``L_bar(alpha)`` per grid point.
+    rloss_min: ``L_bar(alpha_hat)``.
+    se_alpha: ``(G,)`` se of the paired loss difference against ``alpha_hat``
+      per grid point; a non-finite value counts as 0.
+    alpha_hat_index: Index of the grid point that is ``alpha_hat``, or
+      ``None`` when ``alpha_hat`` lies between grid points (Brent refinement).
+
+  Returns:
+    ``(G,)`` boolean membership in ``A_1SE``.
+  """
+  gap = np.asarray(mean_loss, dtype=float) - float(rloss_min)
+  se_values = np.asarray(se_alpha, dtype=float)
+  inside = gap <= np.where(np.isfinite(se_values), se_values, 0.0)
+  if alpha_hat_index is not None:
+    inside[alpha_hat_index] = True
+  return inside
+
+
 def diag2_flatness(
     family: str,
     alpha_grid: np.ndarray,
@@ -2948,8 +2983,9 @@ def select_alpha(
         cluster_robust_se(obs_loss - obs_at_hat[:, None], se_cluster_labels),
         dtype=float,
     )
-  gap = mean_loss - rloss_min
-  one_se_set = gap <= np.where(np.isfinite(se_alpha), se_alpha, 0.0)
+  one_se_set = one_se_membership(
+      mean_loss, rloss_min, se_alpha, None if refined else grid_argmin
+  )
   diag2_ratio, diag2_fired, diag2_threshold = diag2_flatness(
       family, alpha_grid, one_se_set, flatness_ratio
   )

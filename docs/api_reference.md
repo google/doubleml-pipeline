@@ -3351,6 +3351,18 @@ the Student-t value with the same one-sided tail probability,
 smaller of the two counts for the two-way se). `df=None` or `df < 1` returns
 `k`.
 
+### Function: `one_se_membership`
+
+#### `one_se_membership(mean_loss, rloss_min, se_alpha, alpha_hat_index=None) -> np.ndarray`
+
+Membership of every grid point in the Diag2 set
+`A_1SE = {alpha : L_bar(alpha) - L_bar(alpha_hat) <= se(alpha)}`; a non-finite
+`se(alpha)` counts as `0`. `alpha_hat_index` is the index of the grid point
+that is `alpha_hat` itself (`None` after a Brent refinement, when `alpha_hat`
+lies between grid points). That grid point is always a member: its own
+difference is `0` by definition, but `mean_loss` and `rloss_min` add the seeds
+in different orders and can differ in the last bit.
+
 ### Function: `diag2_flatness`
 
 #### `diag2_flatness(family, alpha_grid, one_se_set, flatness_ratio=10.0) -> (ratio, fired, threshold)`

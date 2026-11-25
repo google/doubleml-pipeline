@@ -1481,7 +1481,13 @@ def generate_html_report(output_dir: str) -> str | None:
                         html += "<br><strong>Budget Increment:</strong> " + m.budget_increment;
                     }}
                     // Budget mode and the optimization statistics.
-                    var fmtOpt = function(v) {{ return (v === null || v === undefined) ? "n/a" : Number(v).toLocaleString('en-US', {{maximumFractionDigits: 4}}); }};
+                    var fmtOpt = function(v) {{
+                        if (v === null || v === undefined) {{ return "n/a"; }}
+                        var text = Number(v).toLocaleString(
+                            'en-US', {{maximumFractionDigits: 4}});
+                        // A negative value that rounds to zero prints as "-0".
+                        return text === "-0" ? "0" : text;
+                    }};
                     if (m.budget_mode !== undefined) {{
                         html += "<br><strong>Budget mode:</strong> " + m.budget_mode;
                     }}

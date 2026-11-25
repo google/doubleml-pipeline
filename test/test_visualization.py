@@ -1339,6 +1339,27 @@ class GenerateHtmlReportTest(unittest.TestCase):
       self.assertEqual(rows["Decision"], "linear")
       self.assertEqual(rows["Simple Optimization"], "n/a")
 
+  def test_optimization_statistics_print_no_negative_zero(self):
+    """The report script holds the rule that prints a rounded "-0" as "0"."""
+    with tempfile.TemporaryDirectory() as tmp:
+      self._write_run(
+          tmp,
+          {
+              "treatment_cols": ["tv_spend"],
+              "outcome_col": "sales",
+              "treatment_types": {"tv_spend": "spend"},
+              "x_cols_list": [["price"]],
+              "date_col": "date",
+          },
+      )
+      report_path = html_extraction.generate_html_report(tmp)
+      with open(report_path, encoding="utf-8") as f:
+        html = f.read()
+    # `Unspent budget` is `K - K_out`.  Rounding can leave it at -5.8e-11,
+    # which the number formatter of the browser prints as "-0".  The test has
+    # no browser, so it checks that the report carries the rule.
+    self.assertIn('return text === "-0" ? "0" : text;', html)
+
   def _header_rows_of_run(self, metadata):
     """Renders a run with ``metadata`` and returns its header rows as a dict."""
     with tempfile.TemporaryDirectory() as tmp:

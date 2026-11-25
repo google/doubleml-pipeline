@@ -1274,10 +1274,15 @@ def allocate_saturation_budget(
       allocation = allocation * (budget_k / total)
     unspent = budget_k - float(allocation.sum())
   k_out = float(allocation.sum())
+  # `t_roi = inf` marks a unit the threshold does not bind.  Such a unit is
+  # never capped by the ROI; 0 stands in for its cap so that the comparison
+  # does not evaluate `inf - inf`.
+  roi_binds = np.isfinite(t_roi)
+  t_roi_finite = np.where(roi_binds, t_roi, 0.0)
   capped = (
       (~negative)
-      & np.isfinite(t_roi)
-      & (allocation >= t_roi - _CAP_TOL * np.maximum(t_roi, 1.0))
+      & roi_binds
+      & (allocation >= t_roi_finite - _CAP_TOL * np.maximum(t_roi_finite, 1.0))
   )
   at_support = (
       (~negative)

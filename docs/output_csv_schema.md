@@ -269,7 +269,7 @@ their linear references),
 | `alpha` | `float64` | `0.5` | Family parameter implied by the grid variable (the value Phases 1–3 use). |
 | `mean_r_loss` | `float64` | `0.7533` | Seed-averaged profiled R-loss $\bar L(\alpha) = \frac{1}{S}\sum_s \hat L_s(\alpha)$. Lower is better; `alpha_hat` is its argmin (+ Brent). |
 | `se_alpha` | `float64` | `0.0012` | Diag2 $\widehat{se}(\alpha)$: the cluster-robust SE of the per-observation paired loss difference between $\alpha$ and $\hat\alpha$ (the ±1 se band of `diag2_rloss_profile.png`). |
-| `in_1se_set` | `bool` | `True` | Whether the grid point lies in the Diag2 1-SE set $A_{1SE} = \{\alpha : \bar L(\alpha) - \bar L(\hat\alpha) \leq \widehat{se}(\alpha)\}$ (no contiguity requirement). |
+| `in_1se_set` | `bool` | `True` | Whether the grid point lies in the Diag2 1-SE set $A_{1SE} = \{\alpha : \bar L(\alpha) - \bar L(\hat\alpha) \leq \widehat{se}(\alpha)\}$ (no contiguity requirement). The grid point that is $\hat\alpha$ itself is always a member. |
 | `fbar_q25`, `fbar_q50`, `fbar_q75`, `fbar_q90` | `float64` | `0.63` | Diag4 shape quantiles $\phi_p(\alpha) = \bar f(q_p(T \mid T > 0); \alpha)$ at this grid point. |
 | `basis_approx_error_alpha` | `float64` | `2.1e-05` | Diag1 $\varepsilon(J)$ at this grid point: relative RMS error of the $J$-term T-basis approximation of $\bar f(\cdot; \alpha)$. |
 

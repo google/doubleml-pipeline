@@ -47,6 +47,7 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+import warnings
 
 from doubleml_pipeline import optimization
 from doubleml_pipeline.models import saturation
@@ -798,6 +799,31 @@ class SolverPropertiesTest(unittest.TestCase):
     self.assertEqual(float(cap[0]), 0.0)
     with self.assertRaises(ValueError):
       saturation.roi_cap("exp", 1.0, np.array([1.0]), -0.1)
+
+  def test_unit_the_threshold_does_not_bind_is_not_capped_by_roi(self):
+    """A unit whose ROI cap is inf counts as not capped, without a warning."""
+    # exp, alpha = 1, r = 4.  Unit 1 (theta = 10, support cap 0.1): the ROI at
+    # the support cap is 10 (1 - e^-0.1) / 0.1 = 9.5 >= 4, so the threshold
+    # does not bind and T^r = inf.  Unit 2 (theta = 5, support cap 10): the
+    # ROI falls to 4 at T^r = 0.4642, below the support cap.
+    theta = np.array([10.0, 5.0])
+    t_actual = np.array([1.0, 1.0])
+    with warnings.catch_warnings():
+      warnings.simplefilter("error")
+      res = optimization.allocate_saturation_budget(
+          "exp",
+          1.0,
+          theta,
+          t_actual,
+          t_bar=np.array([0.1, 10.0]),
+          threshold_roi=4.0,
+          budget_mode="roi_target",
+      )
+    self.assertTrue(np.isinf(res.t_roi_cap[0]))
+    np.testing.assert_allclose(res.allocation, [0.1, 0.4642], atol=1e-4)
+    np.testing.assert_array_equal(res.capped_by_roi, [False, True])
+    np.testing.assert_array_equal(res.capped_by_support, [True, False])
+    self.assertEqual(res.n_units_capped_by_roi, 1)
 
   def test_kkt_inversion_closed_forms(self):
     """The closed-form (fbar')^-1(mu / theta) for all four families."""
