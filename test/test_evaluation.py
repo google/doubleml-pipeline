@@ -16,7 +16,8 @@
 
 * ``metrics`` (SMAPE, ground-truth metrics), ``selection``
   (``shortlist_top_models``) and ``runner.DoubleMLPipeline`` (initialization,
-  multi-repetition aggregation with a mocked ``DoubleMLPLR``).
+  multi-repetition aggregation and the data object handed to DoubleML with and
+  without cluster columns, each with a mocked ``DoubleMLPLR``).
 * ``utils.io.save_step1_outputs`` / ``save_step2_outputs``: the CSVs written
   per exploration run under the default and the detailed ``process_log``.
 
@@ -27,6 +28,7 @@
 import os
 import unittest
 from unittest import mock
+import warnings
 
 from doubleml_pipeline.evaluation import metrics
 from doubleml_pipeline.evaluation import runner
@@ -160,6 +162,61 @@ class RunnerTest(unittest.TestCase):
     self.assertEqual(len(df_res), n_obs)
     self.assertIn("Y_pred", df_res.columns)
     self.assertIn("T_pred", df_res.columns)
+
+  def _data_handed_to_doubleml(self, mock_plr_class, cluster_cols):
+    """Runs the pipeline on 10 rows and returns the data ``DoubleMLPLR`` got.
+
+    Args:
+      mock_plr_class: The patched ``doubleml.DoubleMLPLR``.
+      cluster_cols: The cluster columns of the pipeline, or None.
+
+    Returns:
+      The data object that ``run`` passed to ``DoubleMLPLR``.
+    """
+    n_obs = 10
+    mock_plr = mock_plr_class.return_value
+    mock_plr.predictions = {
+        "ml_l": np.zeros((n_obs, 1)),
+        "ml_m": np.zeros((n_obs, 1)),
+    }
+    mock_plr.cate.return_value.confint.return_value = pd.DataFrame({
+        "effect": np.zeros(n_obs),
+        "2.5 %": np.zeros(n_obs),
+        "97.5 %": np.zeros(n_obs),
+    })
+    pipeline = runner.DoubleMLPipeline(
+        y_col="Y",
+        d_col="T",
+        x_cols=["X1"],
+        ml_y_model="lgbm",
+        ml_t_model="lgbm",
+        cluster_cols=cluster_cols,
+    )
+    rng = np.random.default_rng(0)
+    df_orig = pd.DataFrame({
+        "Y": rng.random(n_obs),
+        "T": rng.random(n_obs),
+        "X1": rng.random(n_obs),
+        "geo": ["a", "b"] * (n_obs // 2),
+    })
+    pipeline.run(df_orig, scaler=scalers.CausalDataScaler())
+    return mock_plr_class.call_args.args[0]
+
+  @mock.patch("doubleml.DoubleMLPLR", autospec=True)
+  def test_cluster_columns_reach_doubleml(self, mock_plr_class):
+    """Cluster columns go to DoubleML without its deprecation warning."""
+    with warnings.catch_warnings():
+      # DoubleML warns that `DoubleMLClusterData` will be removed.
+      warnings.filterwarnings("error", message="DoubleMLClusterData")
+      dml_data = self._data_handed_to_doubleml(mock_plr_class, ["geo"])
+    self.assertTrue(dml_data.is_cluster_data)
+    self.assertEqual(dml_data.cluster_cols, ["geo"])
+
+  @mock.patch("doubleml.DoubleMLPLR", autospec=True)
+  def test_no_cluster_columns_means_no_clustering(self, mock_plr_class):
+    """Without cluster columns the data handed to DoubleML is unclustered."""
+    dml_data = self._data_handed_to_doubleml(mock_plr_class, None)
+    self.assertFalse(dml_data.is_cluster_data)
 
 
 class StepOutputWriterTest(unittest.TestCase):

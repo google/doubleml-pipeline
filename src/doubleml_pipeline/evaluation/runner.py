@@ -437,7 +437,6 @@ class DoubleMLPipeline:
       # refitted), so they live in the coordinate system of the fitted model.
       df_norm_score = scaler.transform(df_score) if has_score else None
 
-    # FIX: Use DoubleMLClusterData with cluster_cols for robust inference
     missing_clusters = [
         c for c in self.cluster_cols if c not in df_norm.columns
     ]
@@ -445,41 +444,28 @@ class DoubleMLPipeline:
       raise ValueError(
           f'Cluster columns not found in dataframe: {missing_clusters}'
       )
-    v_clusters = self.cluster_cols
-    if v_clusters:
-      dml_data = dml.DoubleMLClusterData(
-          df_norm,
-          y_col=self.y_col,
-          d_cols=self.d_col,
-          x_cols=self.x_cols,
-          cluster_cols=v_clusters,
-      )
-    else:
-      dml_data = dml.DoubleMLData(
-          df_norm, y_col=self.y_col, d_cols=self.d_col, x_cols=self.x_cols
-      )
+    # With cluster columns DoubleML draws the folds by cluster and reports
+    # cluster-robust standard errors; `None` means no clustering.
+    dml_data = dml.DoubleMLData(
+        df_norm,
+        y_col=self.y_col,
+        d_cols=self.d_col,
+        x_cols=self.x_cols,
+        cluster_cols=self.cluster_cols or None,
+    )
 
     r_state = self.random_state if self.random_state is not None else rep_id
     np.random.seed(r_state)
 
     with warnings.catch_warnings():
       warnings.filterwarnings('ignore', category=UserWarning, module='doubleml')
-      if isinstance(dml_data, dml.DoubleMLClusterData):
-        dml_model = dml.DoubleMLPLR(
-            dml_data,
-            ml_l=self.ml_y,
-            ml_m=self.ml_t,
-            n_folds=self.n_folds,
-            n_rep=self.n_rep,
-        )
-      else:
-        dml_model = dml.DoubleMLPLR(
-            dml_data,
-            ml_l=self.ml_y,
-            ml_m=self.ml_t,
-            n_folds=self.n_folds,
-            n_rep=self.n_rep,
-        )
+      dml_model = dml.DoubleMLPLR(
+          dml_data,
+          ml_l=self.ml_y,
+          ml_m=self.ml_t,
+          n_folds=self.n_folds,
+          n_rep=self.n_rep,
+      )
       dml_model.fit(store_models=True)
 
       if prepared is not None and prepared.cate_basis is not None:
