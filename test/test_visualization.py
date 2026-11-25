@@ -39,6 +39,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from doubleml_pipeline.utils import io as pipeline_io
 from doubleml_pipeline.visualization import html_extraction
 from doubleml_pipeline.visualization import plots
 import matplotlib
@@ -1828,6 +1829,61 @@ class GenerateHtmlReportTest(unittest.TestCase):
           html_extraction._cate_image_widths([missing, missing]),
           ["width: 100%", "width: 100%"],
       )
+
+  def _optimization_metrics_of_run(self, metrics_row):
+    """Renders a run with a one-row ``optimization_metrics.csv``.
+
+    Args:
+      metrics_row: The columns of the row, the total of the saturation-aware
+        optimizer.
+
+    Returns:
+      ``(html, metrics)``: the report, and the metrics of the total that the
+      report embeds for its optimization tab.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+      self._write_run(
+          tmp,
+          {
+              "treatment_cols": ["tv_spend"],
+              "outcome_col": "sales",
+              "treatment_types": {"tv_spend": "spend"},
+              "x_cols_list": [["price"]],
+              "date_col": "date",
+          },
+      )
+      metrics_path = os.path.join(tmp, pipeline_io.OPTIMIZATION_FILE)
+      os.makedirs(os.path.dirname(metrics_path))
+      pd.DataFrame([metrics_row]).to_csv(metrics_path, index=False)
+      report_path = html_extraction.generate_html_report(tmp)
+      with open(report_path, encoding="utf-8") as f:
+        html = f.read()
+    embedded = re.search(r"const optMetricsData = (.*);\n", html).group(1)
+    return html, json.loads(embedded)["main"]["total"]
+
+  def test_optimization_tab_names_the_threshold_roi_type(self):
+    """The optimizer's ``threshold_roi_type`` reaches the optimization tab."""
+    row = {
+        "treatment": "tv_spend",
+        "target_geo": "all",
+        "target_item": "all",
+        "saturation_family": "tanh",
+        "budget_mode": "roi_target",
+    }
+    html, metrics = self._optimization_metrics_of_run(
+        {**row, "threshold_roi_type": "marginal"}
+    )
+    self.assertEqual(metrics["threshold_roi_type"], "marginal")
+    self.assertEqual(metrics["budget_mode"], "roi_target")
+    # The line of the tab with its two readings.
+    self.assertIn("ROI threshold type (threshold_roi_type):", html)
+    self.assertIn(
+        "(the marginal ROI of every unit is at least the threshold)", html
+    )
+    self.assertIn("(the ROI of every unit is at least the threshold)", html)
+    # A metrics file written before the setting existed has no such entry.
+    _, metrics = self._optimization_metrics_of_run(row)
+    self.assertNotIn("threshold_roi_type", metrics)
 
 
 if __name__ == "__main__":

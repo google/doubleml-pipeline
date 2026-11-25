@@ -31,6 +31,10 @@
 * A worked example (exp, theta = (10, 5), K = 2, r = 4): exact solution
   ``T = (1.540, 0.460)``, total KPI 9.70, versus 8.65 for the abolished greedy
   rule.
+* ``threshold_roi_type``: the marginal-ROI cap
+  (:func:`saturation.marginal_roi_cap`) and the allocations of ``"marginal"``
+  (``roi_target`` maximizes ``sum_t (theta_t fbar(T_t) - r T_t)``, ``fixed``
+  does so within the budget) next to the default ``"average"``.
 * The budget upper bound ``K`` (``compute_budget``).
 * The frame-level :func:`optimization.optimize_saturation`: allocation units,
   caps by geo x item cell, ``opt_geos`` / ``opt_items``, the ``optimized_*``
@@ -605,15 +609,17 @@ def _kpi(family, alpha, theta, t, t_ref):
   )
 
 
+def _random_problem(rng, n=40):
+  """Random units: ``(theta, t_actual, t_bar)``, some with ``theta <= 0``."""
+  theta = rng.normal(2.0, 1.5, size=n)  # some negative units
+  theta[: n // 8] = -np.abs(theta[: n // 8])
+  t_actual = np.abs(rng.normal(2.0, 1.0, size=n))
+  t_bar = t_actual * rng.uniform(1.0, 2.5, size=n)
+  return theta, t_actual, t_bar
+
+
 class SolverPropertiesTest(unittest.TestCase):
   """Budget, caps, ROI constraint and KKT condition of the solver."""
-
-  def _random_problem(self, rng, n=40):
-    theta = rng.normal(2.0, 1.5, size=n)  # some negative units
-    theta[: n // 8] = -np.abs(theta[: n // 8])
-    t_actual = np.abs(rng.normal(2.0, 1.0, size=n))
-    t_bar = t_actual * rng.uniform(1.0, 2.5, size=n)
-    return theta, t_actual, t_bar
 
   def test_fixed_reallocate_true(self):
     """Tests fixed-budget allocation with reallocation across families."""
@@ -621,7 +627,7 @@ class SolverPropertiesTest(unittest.TestCase):
     for family, alpha in _FAMILIES:
       for r in (0.0, 0.3, 0.8):
         with self.subTest(family=family, r=r):
-          theta, t_actual, t_bar = self._random_problem(rng)
+          theta, t_actual, t_bar = _random_problem(rng)
           res = optimization.allocate_saturation_budget(
               family,
               alpha,
@@ -680,7 +686,7 @@ class SolverPropertiesTest(unittest.TestCase):
     rng = np.random.default_rng(1)
     for family, alpha in _FAMILIES:
       with self.subTest(family=family):
-        theta, t_actual, t_bar = self._random_problem(rng)
+        theta, t_actual, t_bar = _random_problem(rng)
         r = 0.6
         res = optimization.allocate_saturation_budget(
             family,
@@ -723,7 +729,7 @@ class SolverPropertiesTest(unittest.TestCase):
     rng = np.random.default_rng(2)
     for family, alpha in _FAMILIES:
       with self.subTest(family=family):
-        theta, t_actual, t_bar = self._random_problem(rng)
+        theta, t_actual, t_bar = _random_problem(rng)
         res = optimization.allocate_saturation_budget(
             family,
             alpha,
@@ -972,6 +978,405 @@ class WorkedExampleTest(unittest.TestCase):
     )
 
 
+def _unit_profit(family, alpha, theta, t, r):
+  """``theta_t fbar(T_t) - r T_t`` per unit: the KPI less ``r`` per spend."""
+  return (
+      theta * saturation.normalized_saturation(t, family, alpha, _T_REF)
+      - r * t
+  )
+
+
+class ThresholdRoiTypeTest(unittest.TestCase):
+  """``threshold_roi_type``: ``r`` bounds the ROI or the marginal ROI."""
+
+  def test_marginal_roi_cap_cases(self):
+    """Tests marginal_roi_cap roots, boundary conditions, invalid thresholds."""
+    # exp, alpha = 1, kappa = 1: theta = 5, r = 4 -> 5 e^-T = 4, T^r = ln 1.25,
+    # below the average-ROI cap 0.46 of the same unit (test_roi_cap_cases).
+    cap = saturation.marginal_roi_cap("exp", 1.0, np.array([5.0]), 4.0)
+    self.assertAlmostEqual(float(cap[0]), np.log(1.25), places=12)
+    self.assertAlmostEqual(float(cap[0]), 0.22, places=2)
+    # theta fbar'(0) <= r -> 0 (exp slope at 0 is alpha).
+    cap = saturation.marginal_roi_cap("exp", 1.0, np.array([3.0, 4.0]), 4.0)
+    np.testing.assert_array_equal(cap, [0.0, 0.0])
+    # r = 0 -> inf; theta <= 0 -> 0.
+    cap = saturation.marginal_roi_cap(
+        "exp", 1.0, np.array([3.0, -1.0, 0.0]), 0.0
+    )
+    self.assertTrue(np.isinf(cap[0]))
+    np.testing.assert_array_equal(cap[1:], [0.0, 0.0])
+    # Bound: mROI(t_upper) >= r -> not binding below t_upper -> inf; a bound
+    # above the root leaves the root.
+    cap = saturation.marginal_roi_cap(
+        "exp", 1.0, np.array([5.0, 5.0]), 4.0, t_upper=np.array([0.1, 1.0])
+    )
+    self.assertTrue(np.isinf(cap[0]))
+    self.assertAlmostEqual(float(cap[1]), np.log(1.25), places=12)
+    # No unit: an empty cap.
+    cap = saturation.marginal_roi_cap("exp", 1.0, np.zeros(0), 4.0, t_upper=1.0)
+    self.assertEqual(cap.shape, (0,))
+    with self.assertRaises(ValueError):
+      saturation.marginal_roi_cap("exp", 1.0, np.array([1.0]), -0.1)
+
+  def test_marginal_cap_solves_the_marginal_condition(self):
+    """``theta fbar'(T^r) = r`` at the cap, which is below the average cap."""
+    theta = np.linspace(0.05, 5.0, 60)
+    for family, alpha in _FAMILIES:
+      for r in (0.2, 0.6):
+        with self.subTest(family=family, r=r):
+          cap = saturation.marginal_roi_cap(
+              family, alpha, theta, r, t_ref=_T_REF
+          )
+          average_cap = saturation.roi_cap(
+              family, alpha, theta, r, t_ref=_T_REF
+          )
+          # Both caps are 0 for the same units: theta fbar'(0) <= r.
+          zero = (
+              theta * saturation.marginal_effect_at_zero(family, alpha, _T_REF)
+              <= r
+          )
+          self.assertEqual(bool(zero.any()), family != "power")
+          np.testing.assert_array_equal(cap[zero], 0.0)
+          np.testing.assert_array_equal(average_cap[zero], 0.0)
+          funded = ~zero
+          np.testing.assert_allclose(
+              theta[funded]
+              * saturation.normalized_derivative(
+                  cap[funded], family, alpha, _T_REF
+              ),
+              r,
+              rtol=1e-9,
+          )
+          # fbar(T) / T > fbar'(T): the marginal cap is the smaller one, so
+          # the ROI of the unit at the marginal cap is above r.
+          self.assertTrue(np.all(cap[funded] < average_cap[funded]))
+          roi = (
+              theta[funded]
+              * saturation.normalized_saturation(
+                  cap[funded], family, alpha, _T_REF
+              )
+              / cap[funded]
+          )
+          self.assertTrue(np.all(roi > r))
+
+  def test_roi_target_marginal_maximizes_the_incremental_profit(self):
+    """Every unit sits where ``theta fbar(T) - r T`` peaks on ``[0, T_bar]``."""
+    rng = np.random.default_rng(4)
+    r = 0.5
+    steps = np.linspace(0.0, 1.0, 2001)[:, None]
+    for family, alpha in _FAMILIES:
+      with self.subTest(family=family):
+        theta, t_actual, t_bar = _random_problem(rng)
+        res = optimization.allocate_saturation_budget(
+            family,
+            alpha,
+            theta,
+            t_actual,
+            t_bar,
+            threshold_roi=r,
+            t_ref=_T_REF,
+            budget_mode="roi_target",
+            threshold_roi_type="marginal",
+        )
+        self.assertEqual(res.threshold_roi_type, "marginal")
+        t_star = res.allocation
+        cap = saturation.marginal_roi_cap(family, alpha, theta, r, t_ref=_T_REF)
+        np.testing.assert_allclose(
+            t_star, np.where(theta > 0, np.minimum(t_bar, cap), 0.0)
+        )
+        self.assertTrue(np.isnan(res.budget_k))
+        self.assertTrue(np.isnan(res.marginal_roi_at_optimum))
+        # Unit by unit, no spend on a dense grid of [0, T_bar_t] earns more.
+        profit = _unit_profit(family, alpha, theta, t_star, r)
+        on_grid = _unit_profit(family, alpha, theta, steps * t_bar, r)
+        self.assertTrue(np.all(profit >= on_grid.max(axis=0) - 1e-9))
+        # Both caps bind somewhere, and a unit on its ROI cap has a marginal
+        # ROI of exactly r.
+        at_roi_cap = res.capped_by_roi & (t_star > 0)
+        self.assertTrue(at_roi_cap.any())
+        self.assertTrue(res.capped_by_support.any())
+        np.testing.assert_allclose(
+            theta[at_roi_cap]
+            * saturation.normalized_derivative(
+                t_star[at_roi_cap], family, alpha, _T_REF
+            ),
+            r,
+            rtol=1e-9,
+        )
+        # The "average" allocation spends more, for a smaller profit.
+        average = optimization.allocate_saturation_budget(
+            family,
+            alpha,
+            theta,
+            t_actual,
+            t_bar,
+            threshold_roi=r,
+            t_ref=_T_REF,
+            budget_mode="roi_target",
+        )
+        self.assertTrue(np.all(t_star <= average.allocation + 1e-12))
+        self.assertLess(res.k_out, average.k_out)
+        self.assertGreater(
+            float(profit.sum()),
+            float(
+                _unit_profit(family, alpha, theta, average.allocation, r).sum()
+            ),
+        )
+
+  def test_fixed_marginal_is_the_budget_or_the_threshold(self):
+    """Fixed budget: the r = 0 allocation, or the marginal caps if cheaper."""
+    rng = np.random.default_rng(5)
+    regimes = set()
+    for family, alpha in _FAMILIES:
+      for r in (0.05, 0.3, 1.2):
+        with self.subTest(family=family, r=r):
+          theta, t_actual, t_bar = _random_problem(rng)
+          res = optimization.allocate_saturation_budget(
+              family,
+              alpha,
+              theta,
+              t_actual,
+              t_bar,
+              threshold_roi=r,
+              t_ref=_T_REF,
+              budget_mode="fixed",
+              budget_reallocate=True,
+              threshold_roi_type="marginal",
+          )
+          t_star = res.allocation
+          k = float(t_actual.sum())
+          self.assertAlmostEqual(res.budget_k, k)
+          self.assertLessEqual(float(t_star.sum()), k * (1 + 1e-10))
+          self.assertTrue(np.all(t_star >= 0.0))
+          self.assertTrue(np.all(t_star <= t_bar * (1 + 1e-10) + 1e-12))
+          self.assertTrue(np.all(t_star[theta <= 0] == 0.0))
+          # Marginal ROI constraint on every funded unit.
+          funded = t_star > 1e-9
+          mroi = theta[funded] * saturation.normalized_derivative(
+              t_star[funded], family, alpha, _T_REF
+          )
+          self.assertTrue(
+              np.all(mroi >= r * (1 - 1e-7)), (family, r, mroi.min())
+          )
+          no_budget = optimization.allocate_saturation_budget(
+              family,
+              alpha,
+              theta,
+              t_actual,
+              t_bar,
+              threshold_roi=r,
+              t_ref=_T_REF,
+              budget_mode="roi_target",
+              threshold_roi_type="marginal",
+          )
+          if no_budget.k_out <= k:
+            # The budget does not bind: the allocation of roi_target.
+            regimes.add("threshold")
+            np.testing.assert_allclose(
+                t_star, no_budget.allocation, rtol=1e-9, atol=1e-12
+            )
+            self.assertEqual(res.marginal_roi_at_optimum, 0.0)
+            self.assertAlmostEqual(res.unspent_budget, k - no_budget.k_out)
+          else:
+            # The budget binds at mu* > r, where the threshold is idle: the
+            # allocation of r = 0.
+            regimes.add("budget")
+            no_threshold = optimization.allocate_saturation_budget(
+                family,
+                alpha,
+                theta,
+                t_actual,
+                t_bar,
+                threshold_roi=0.0,
+                t_ref=_T_REF,
+                budget_mode="fixed",
+                budget_reallocate=True,
+            )
+            np.testing.assert_allclose(
+                t_star, no_threshold.allocation, rtol=1e-6, atol=1e-8
+            )
+            self.assertGreater(res.marginal_roi_at_optimum, r)
+            # The "average" threshold is idle there too: the types coincide.
+            average = optimization.allocate_saturation_budget(
+                family,
+                alpha,
+                theta,
+                t_actual,
+                t_bar,
+                threshold_roi=r,
+                t_ref=_T_REF,
+                budget_mode="fixed",
+                budget_reallocate=True,
+            )
+            np.testing.assert_allclose(
+                average.allocation, t_star, rtol=1e-6, atol=1e-8
+            )
+    self.assertEqual(regimes, {"threshold", "budget"})
+
+  def test_fixed_marginal_maximizes_the_profit_within_the_budget(self):
+    """Two units: no feasible point of a dense grid earns a higher profit."""
+    theta = np.array([3.0, 1.5])
+    t_actual = np.array([1.0, 1.5])  # K = 2.5
+    t_bar = np.array([4.0, 3.0])
+    steps = np.linspace(0.0, 1.0, 801)
+    grid_1, grid_2 = np.meshgrid(
+        steps * t_bar[0], steps * t_bar[1], indexing="ij"
+    )
+    feasible = grid_1 + grid_2 <= t_actual.sum()
+    for family, alpha in _FAMILIES:
+      # r = 0.1: the budget binds; r = 0.9: the marginal caps cost less than K.
+      for r in (0.1, 0.9):
+        with self.subTest(family=family, r=r):
+          on_grid = _unit_profit(
+              family, alpha, theta[0], grid_1, r
+          ) + _unit_profit(family, alpha, theta[1], grid_2, r)
+          res = optimization.allocate_saturation_budget(
+              family,
+              alpha,
+              theta,
+              t_actual,
+              t_bar,
+              threshold_roi=r,
+              t_ref=_T_REF,
+              budget_mode="fixed",
+              threshold_roi_type="marginal",
+          )
+          profit = float(
+              _unit_profit(family, alpha, theta, res.allocation, r).sum()
+          )
+          self.assertGreaterEqual(profit, float(on_grid[feasible].max()) - 1e-6)
+          # The "average" allocation is feasible too, so it earns no more.
+          average = optimization.allocate_saturation_budget(
+              family,
+              alpha,
+              theta,
+              t_actual,
+              t_bar,
+              threshold_roi=r,
+              t_ref=_T_REF,
+              budget_mode="fixed",
+          )
+          profit_average = float(
+              _unit_profit(family, alpha, theta, average.allocation, r).sum()
+          )
+          self.assertLessEqual(profit_average, profit + 1e-6)
+
+  def test_fixed_marginal_without_reallocation_truncates_at_the_cap(self):
+    """budget_reallocate=False: ``min(T^(1), T^r)`` with the marginal cap."""
+    rng = np.random.default_rng(6)
+    r = 0.6
+    for family, alpha in _FAMILIES:
+      with self.subTest(family=family):
+        theta, t_actual, t_bar = _random_problem(rng)
+        res = optimization.allocate_saturation_budget(
+            family,
+            alpha,
+            theta,
+            t_actual,
+            t_bar,
+            threshold_roi=r,
+            t_ref=_T_REF,
+            budget_mode="fixed",
+            budget_reallocate=False,
+            threshold_roi_type="marginal",
+        )
+        k_plus = float(t_actual[theta > 0].sum())
+        self.assertAlmostEqual(res.budget_k_prime, k_plus)
+        first = saturation.solve_budget_allocation(
+            family, alpha, theta, k_plus, t_bar, t_ref=_T_REF
+        )
+        want = np.minimum(
+            first.allocation,
+            saturation.marginal_roi_cap(family, alpha, theta, r, t_ref=_T_REF),
+        )
+        want[theta <= 0] = 0.0
+        np.testing.assert_allclose(res.allocation, want, rtol=1e-9, atol=1e-12)
+        self.assertGreaterEqual(res.unspent_budget, -1e-9)
+
+  def test_default_type_is_average(self):
+    """Omitting ``threshold_roi_type`` keeps the average-ROI rule."""
+    self.assertEqual(optimization.THRESHOLD_ROI_TYPES, ("average", "marginal"))
+    theta, t_actual, t_bar = _random_problem(np.random.default_rng(7))
+    for mode in optimization.BUDGET_MODES:
+      with self.subTest(budget_mode=mode):
+        default = optimization.allocate_saturation_budget(
+            "tanh",
+            0.7,
+            theta,
+            t_actual,
+            t_bar,
+            threshold_roi=0.5,
+            t_ref=_T_REF,
+            budget_mode=mode,
+        )
+        explicit = optimization.allocate_saturation_budget(
+            "tanh",
+            0.7,
+            theta,
+            t_actual,
+            t_bar,
+            threshold_roi=0.5,
+            t_ref=_T_REF,
+            budget_mode=mode,
+            threshold_roi_type=" Average ",
+        )
+        self.assertEqual(default.threshold_roi_type, "average")
+        self.assertEqual(explicit.threshold_roi_type, "average")
+        np.testing.assert_array_equal(default.allocation, explicit.allocation)
+        want_cap = saturation.roi_cap(
+            "tanh", 0.7, theta, 0.5, t_ref=_T_REF, t_upper=t_bar
+        )
+        np.testing.assert_array_equal(
+            default.t_roi_cap, np.where(theta > 0, want_cap, 0.0)
+        )
+    with self.assertRaises(ValueError):
+      optimization.allocate_saturation_budget(
+          "exp", 0.5, np.ones(3), np.ones(3), 2.0, threshold_roi_type="median"
+      )
+
+  def test_worked_example(self):
+    """exp, theta = (10, 5), K = 2, r = 4: the marginal rule spends 1.14."""
+    theta = np.array([10.0, 5.0])
+    t_actual = np.array([1.0, 1.0])  # K = 2 with budget_increment = 0
+    marginal = optimization.allocate_saturation_budget(
+        "exp",
+        1.0,
+        theta,
+        t_actual,
+        t_bar=10.0,
+        threshold_roi=4.0,
+        t_ref=None,
+        budget_mode="fixed",
+        threshold_roi_type="marginal",
+    )
+    # 10 e^-T = 4 and 5 e^-T = 4: T = (ln 2.5, ln 1.25) = (0.92, 0.22).  The
+    # next unit of spend would earn less than 4, so 0.86 of K stays unspent.
+    np.testing.assert_allclose(
+        marginal.allocation, [np.log(2.5), np.log(1.25)], rtol=1e-9
+    )
+    self.assertAlmostEqual(marginal.k_out, 1.14, places=2)
+    self.assertAlmostEqual(marginal.unspent_budget, 0.86, places=2)
+    self.assertEqual(marginal.marginal_roi_at_optimum, 0.0)
+    self.assertEqual(marginal.n_units_capped_by_roi, 2)
+    kpi = float(np.sum(theta * (1 - np.exp(-marginal.allocation))))
+    self.assertAlmostEqual(kpi, 7.0, places=9)
+    # The average rule spends the whole K = 2 for a KPI of 9.70
+    # (WorkedExampleTest): a larger KPI, but a smaller KPI - 4 x spend.
+    average = optimization.allocate_saturation_budget(
+        "exp",
+        1.0,
+        theta,
+        t_actual,
+        t_bar=10.0,
+        threshold_roi=4.0,
+        t_ref=None,
+        budget_mode="fixed",
+    )
+    kpi_average = float(np.sum(theta * (1 - np.exp(-average.allocation))))
+    self.assertAlmostEqual(kpi - 4.0 * marginal.k_out, 2.44, places=2)
+    self.assertAlmostEqual(kpi_average - 4.0 * average.k_out, 1.70, places=2)
+
+
 class BudgetTest(unittest.TestCase):
   """Budget upper bound K."""
 
@@ -1169,6 +1574,48 @@ class OptimizeSaturationFrameTest(unittest.TestCase):
     self.assertAlmostEqual(total["K_out"], out["optimized_spend"].sum())
     cell_max = df.groupby(["geo", "item"])["spend"].transform("max")
     self.assertTrue((out["optimized_spend"] <= cell_max + 1e-9).all())
+
+  def test_threshold_roi_type_in_the_frame(self):
+    """The metrics name the type; "marginal" stops at a marginal ROI of r."""
+    df, theta = _frame()
+    r = 0.05
+    spend = {}
+    for roi_type in ("average", "marginal"):
+      # The default is "average": that run does not pass the argument.
+      extra = {} if roi_type == "average" else {"threshold_roi_type": roi_type}
+      with tempfile.TemporaryDirectory() as out_dir:
+        out = self._run(
+            df, theta, out_dir, threshold_roi=r, budget_mode="roi_target",
+            **extra,
+        )
+        metrics = pd.read_csv(
+            os.path.join(
+                out_dir, "007_optimization", "optimization_metrics.csv"
+            )
+        )
+      spend[roi_type] = out["optimized_spend"].to_numpy()
+      self.assertTrue((metrics["threshold_roi_type"] == roi_type).all())
+      cols = list(metrics.columns)
+      self.assertEqual(
+          cols[cols.index("threshold_roi") + 1], "threshold_roi_type"
+      )
+    # The marginal rule never spends more on a row, and less in total.
+    self.assertTrue(np.all(spend["marginal"] <= spend["average"] + 1e-9))
+    self.assertLess(spend["marginal"].sum(), spend["average"].sum())
+    # Every funded row keeps a marginal ROI of at least r; a row below the
+    # maximum of its geo x item cell sits exactly at r.
+    funded = spend["marginal"] > 1e-9
+    mroi = theta * saturation.normalized_derivative(
+        spend["marginal"], "exp", 0.05, 40.0
+    )
+    self.assertTrue(np.all(mroi[funded] >= r * (1 - 1e-9)))
+    cell_max = df.groupby(["geo", "item"])["spend"].transform("max").to_numpy()
+    below_cap = funded & (spend["marginal"] < cell_max * (1 - 1e-9))
+    self.assertGreater(int(below_cap.sum()), len(df) // 2)
+    np.testing.assert_allclose(mroi[below_cap], r, rtol=1e-9)
+    with self.assertRaises(ValueError):
+      with tempfile.TemporaryDirectory() as out_dir:
+        self._run(df, theta, out_dir, threshold_roi_type="median")
 
   def test_cap_quantile_default_is_the_cell_maximum(self):
     """cap_quantile = 1.0 reproduces the historical cell-maximum cap."""

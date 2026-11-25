@@ -130,7 +130,8 @@ parallelization, model selection, and visual reporting.
     and the linear fallback). A negative value raises
     `ValueError` at initialization. Applied per row (instance) in both
     optimizers: in the saturation-aware optimizer it is the per-unit constraint
-    `ROI_t(T_t) >= r`, enforced as the cap `T_t <= T_t^r` (see
+    `ROI_t(T_t) >= r` (with `optimization.threshold_roi_type = 'marginal'`:
+    `theta_t fbar'(T_t) >= r`), enforced as the cap `T_t <= T_t^r` (see
     `optimize_saturation`); in the simple optimizer it cuts rows inside
     `opt_periods` whose row-level `ROI < r` (see `optimize`). Pass `0.0` in
     `fixed` or simple mode for no ROI floor. Example: `1.5`.
@@ -329,6 +330,7 @@ Family default bounds (manual mode): `'power'` -> `(0.05, 0.95)`; `'exp'`,
 | Key | Type | Default | Meaning |
 | :--- | :--- | :--- | :--- |
 | `budget_mode` | `str` | `'fixed'` | `'fixed'`: the budget `K = (1 + budget_increment) x actual total of the target units` is allocated in one KKT pass. `'roi_target'`: no budget; every unit with `theta_t > 0` receives `min(T_bar_t, T_t^r)` (requires `opt_threshold_roi > 0`; `budget_increment` / `budget_reallocate` are ignored with an INFO line when explicitly passed). |
+| `threshold_roi_type` | `str` | `'average'` | The quantity of every unit that `opt_threshold_roi = r` bounds from below; it defines the ROI cap `T_t^r`. `'average'`: the ROI of the unit, `theta_t fbar(T) / T >= r`. `'marginal'`: the ROI of its last unit of spend, `theta_t fbar'(T) >= r`; the allocation then maximizes `sum_t (theta_t fbar(T_t) - r T_t)` (within `K` under `fixed`). Other values raise `ValueError` (`optimization.THRESHOLD_ROI_TYPES`). |
 | `budget_increment` | `float` | `0.0` | `fixed` only. `>= -1`. |
 | `budget_reallocate` | `bool` | `True` | `fixed` only. `True` (default): `K' = K`, one solve with the effective caps `min(T_bar_t, T_t^r)` -- the spend of negative-ROI units and the amount removed by the ROI cap are redistributed. `False`: `K' = K_+` (negative-ROI spend removed), one solve with the caps `T_bar_t`, then `T_t* = min(T_t^(1), T_t^r)` without redistribution (`unspent_budget`). |
 | `cap_quantile` | `float` | `1.0` (`optimization.DEFAULT_CAP_QUANTILE`) | Support cap `T_bar_t = max(Q_q(cell_t), T_t^actual)`: the `q`-quantile of the positive actual treatment within the unit's geo × item cell, floored at the unit's own actual value; `1.0` is the cell maximum. Must lie in `(0, 1]` (`ValueError` otherwise). |
@@ -450,6 +452,7 @@ orch = CausalWorkflowOrchestrator(
         # `optimization`, not `saturation`.
         'optimization': {
             'budget_mode': 'fixed',      # 'fixed' | 'roi_target'
+            'threshold_roi_type': 'average',  # default; 'average' | 'marginal'
             'budget_increment': 0.10,    # +10% budget (fixed only)
             'budget_reallocate': False,  # fixed only
             'cap_quantile': 1.0,         # default; support cap = cell maximum
@@ -2493,7 +2496,7 @@ flowchart TD
     I -- "family" --> J["optimize_saturation"]
     I -- "None" --> J0["optimization.optimize (linear fallback)"]
     J --> K["allocate_saturation_budget"]
-    K --> K1["roi_cap"]
+    K --> K1["roi_cap / marginal_roi_cap"]
     K --> K2["solve_budget_allocation -> kkt_allocation"]
 ```
 
@@ -2955,6 +2958,21 @@ fbar'(0) <= r` (or `theta_t <= 0`), and otherwise the unique root of
 the exact root (the cap does not bind below `t_upper`, so `min(T_bar_t,
 T_t^r)` is unaffected). Raises `ValueError` for `threshold_roi < 0`.
 
+### Function: `marginal_roi_cap`
+
+#### `marginal_roi_cap(family, alpha, theta, threshold_roi, t_ref=None, t_upper=None) -> np.ndarray`
+
+The ROI cap `T_t^r` of `optimization.threshold_roi_type = 'marginal'`.
+Because the marginal ROI `theta_t fbar'(T)` is strictly decreasing,
+`theta_t fbar'(T) >= r` is the upper bound `T <= T_t^r` with `T_t^r = inf`
+when `r = 0`, `T_t^r = 0` when `theta_t fbar'(0) <= r` (or `theta_t <= 0`),
+and otherwise the closed form `(fbar')^-1(r / theta_t)` (`kkt_allocation`
+with `mu = r` and no cap). For `r > 0` it is the spend that maximizes
+`theta_t fbar(T) - r T`, and it is never above the cap of `roi_cap` for the
+same `r` (`fbar(T) / T >= fbar'(T)`). `t_upper` works as in `roi_cap`: a unit
+whose marginal ROI at `t_upper` is `>= r` gets `inf`. Raises `ValueError` for
+`threshold_roi < 0`.
+
 ### Function: `kkt_allocation`
 
 #### `kkt_allocation(family, alpha, theta, mu, caps, t_ref=None) -> np.ndarray`
@@ -3009,8 +3027,8 @@ t_ref=T_ref)`. Without `t_ref` the un-normalized objective is used.
 > [!NOTE]
 > The former iterative ROI loop (exclude units below
 > the threshold → re-solve → iterate) no longer exists. The ROI threshold is
-> the per-unit cap `T_t^r` of `roi_cap`, applied inside the single KKT pass
-> (`optimization.allocate_saturation_budget`).
+> the per-unit cap `T_t^r` of `roi_cap` or `marginal_roi_cap`, applied inside
+> the single KKT pass (`optimization.allocate_saturation_budget`).
 
 --------------------------------------------------------------------------------
 
@@ -3997,6 +4015,8 @@ charts.
     summary.
 -   `BUDGET_MODES = ('fixed', 'roi_target')`: the values of
     `optimization.budget_mode`.
+-   `THRESHOLD_ROI_TYPES = ('average', 'marginal')`: the values of
+    `optimization.threshold_roi_type`.
 -   `DEFAULT_CAP_QUANTILE = 1.0`: default of `optimization.cap_quantile`
     (the support cap is the cell maximum).
 -   `REALLOCATE_WITHIN = ('all', 'date')`: the values of
@@ -4011,7 +4031,7 @@ Raises `ValueError` if `budget_increment < -1`.
 
 ### Function: `optimize_saturation`
 
-#### `optimize_saturation(df_1a_consolidated, treatment, treatment_amt, periods, family, alpha, theta, gain=None, budget_increment=0.0, threshold_roi=1.0, other_cost_variables=None, target_geo='all', target_item='all', outcome_col=None, t_ref=None, budget_mode='fixed', budget_reallocate=True, opt_geos=None, opt_items=None, cap_quantile=1.0, reallocate_within='all', **kwargs) -> pd.DataFrame`
+#### `optimize_saturation(df_1a_consolidated, treatment, treatment_amt, periods, family, alpha, theta, gain=None, budget_increment=0.0, threshold_roi=1.0, other_cost_variables=None, target_geo='all', target_item='all', outcome_col=None, t_ref=None, budget_mode='fixed', budget_reallocate=True, opt_geos=None, opt_items=None, cap_quantile=1.0, reallocate_within='all', threshold_roi_type='average', **kwargs) -> pd.DataFrame`
 
 Runs the saturation-aware allocation and writes the optimization CSV and charts
 to `<out_dir>/007_optimization/`. Returns a **copy** of the input frame with the
@@ -4028,7 +4048,10 @@ whole frame; `q = 1.0`, the default, is the cell maximum) floored at the
 unit's own actual spend (`_cell_cap`); `Z_0 = {t : theta_t <= 0}` always gets
 `0`; `K = (1 + budget_increment) sum_t T_t^actual` over all target units and
 `K_+` the same without `Z_0`. The ROI threshold `r = threshold_roi` (default
-`1.0`) is the per-unit cap `T_t^r` (`roi_cap`) and
+`1.0`) is the per-unit cap `T_t^r`: the largest `T` at which the ROI of the
+unit, `theta_t fbar(T) / T`, is `>= r` (`threshold_roi_type='average'`, the
+default; `roi_cap`) or at which its marginal ROI, `theta_t fbar'(T)`, is
+`>= r` (`'marginal'`; `marginal_roi_cap`), and
 `T_bar_t^eff = min(T_bar_t, T_t^r)`. The solve is one KKT pass
 (`allocate_saturation_budget` → `saturation.solve_budget_allocation`) over all
 units (`reallocate_within='all'`) or one per date with the per-date budget
@@ -4045,7 +4068,10 @@ what makes the per-row KKT allocation exact.
     budget (`r > 0` required).
 
 `sum_t T_t* <= K` and `T_t* <= T_bar_t` always hold. Rows outside the target
-set keep their pre-optimization values in the `optimized_*` columns.
+set keep their pre-optimization values in the `optimized_*` columns. With
+`threshold_roi_type='marginal'` the allocation of `roi_target` maximizes
+`sum_t (theta_t fbar(T_t) - r T_t)` on `0 <= T_t <= T_bar_t`, and the one of
+`fixed` with `budget_reallocate=True` maximizes it within `K`.
 
 `t_ref` is `T_ref` in **raw** treatment units (a scalar, or
 one value per row: `saturation.raw_scale_reference(T_ref, c_i)`). With it the
@@ -4067,8 +4093,8 @@ objective for legacy call sites.
 
 **Raises:**
 
--   `ValueError`: On an unknown `budget_mode` or `reallocate_within`, or a
-    `cap_quantile` outside `(0, 1]`.
+-   `ValueError`: On an unknown `budget_mode`, `reallocate_within` or
+    `threshold_roi_type`, or a `cap_quantile` outside `(0, 1]`.
 
 **`optimization_metrics.csv` ** — one row per geo / item / `all`
 combination of the target units over `periods`, with the existing columns
@@ -4083,8 +4109,8 @@ the estimate unless the normalization made `alpha_i` vary), `alpha_hat_min`,
 `alpha_hat_max`, `T_ref_raw` (always written: the median `T_ref` in raw
 units over the aggregated rows, empty without `t_ref`),
 `budget_increment`, and the KKT allocation statistics
-`budget_mode`, `budget_reallocate`, `reallocate_within`, `cap_quantile`,
-`assumptions` (`no_carryover`), `K`, `K_out`, `unspent_budget`,
+`threshold_roi_type`, `budget_mode`, `budget_reallocate`, `reallocate_within`,
+`cap_quantile`, `assumptions` (`no_carryover`), `K`, `K_out`, `unspent_budget`,
 `marginal_roi_at_optimum` (with `marginal_roi_at_optimum_min` / `_max`: under
 `reallocate_within='date'` the main column is the **median** of the per-date
 `mu_d*` and the two others their range; all equal to `mu*` under `'all'`),
@@ -4092,7 +4118,8 @@ units over the aggregated rows, empty without `t_ref`),
 `n_units_capped_by_roi`, `n_units_at_support_cap`. `K`, `K_out`,
 `unspent_budget` and the counts are aggregated over the units of that row (a
 geo row may show a negative `unspent_budget` when budget was reallocated into
-it); `budget_mode`, the scope and `mu*` describe the whole problem; `K`,
+it); `threshold_roi_type`, `budget_mode`, the scope and `mu*` describe the
+whole problem; `K`,
 `unspent_budget`, `budget_increment` and `budget_reallocate` are empty under
 `roi_target`.
 
@@ -4135,28 +4162,33 @@ Dataclass returned by `allocate_saturation_budget`. **Attributes:**
 `roi_target`), `budget_k_prime` (`K'`, the budget handed to the solver: `K`
 or `K_+`), `k_out` (`sum_t T_t*`), `unspent_budget` (`K - K_out`),
 `marginal_roi_at_optimum` (`mu*`; `0` when every unit sits at its cap, `NaN`
-under `roi_target`), `t_bar`, `t_roi_cap` (`inf` where the threshold does
-not bind), `t_bar_eff` (`min(T_bar_t, T_t^r)`), `negative_roi` (`Z_0`),
-`capped_by_roi`, `capped_by_support` (units with `T_t* = T_bar_t`);
+under `roi_target`), `t_bar`, `t_roi_cap` (`T_t^r` of `threshold_roi_type`;
+`inf` where the threshold does not bind), `t_bar_eff` (`min(T_bar_t,
+T_t^r)`), `negative_roi` (`Z_0`), `capped_by_roi`, `capped_by_support` (units
+with `T_t* = T_bar_t`), `threshold_roi_type` (`'average'` or `'marginal'`);
 **properties** `n_units`, `n_units_excluded_negative_roi`,
 `n_units_capped_by_roi`, `n_units_at_support_cap` (the counts written to
 `optimization_metrics.csv`).
 
 ### Function: `allocate_saturation_budget`
 
-#### `allocate_saturation_budget(family, alpha, theta, t_actual, t_bar, threshold_roi=1.0, t_ref=None, budget_mode='fixed', budget_increment=0.0, budget_reallocate=True) -> SaturationAllocation`
+#### `allocate_saturation_budget(family, alpha, theta, t_actual, t_bar, threshold_roi=1.0, t_ref=None, budget_mode='fixed', budget_increment=0.0, budget_reallocate=True, threshold_roi_type='average') -> SaturationAllocation`
 
 The array-level solver behind `optimize_saturation` (see the
 problem definition above). `t_ref` is `T_ref` in raw units (a scalar or one
-value per unit), or `None` for the raw `f`. Returns a `SaturationAllocation`
+value per unit), or `None` for the raw `f`; `threshold_roi_type` picks the ROI
+cap (`'average'`: `saturation.roi_cap`, `'marginal'`:
+`saturation.marginal_roi_cap`). Returns a `SaturationAllocation`
 with `allocation`
 (`T_t*`), `budget_mode`, `budget_k` (`K`), `budget_k_prime` (`K'`), `k_out`
 (`sum_t T_t*`), `unspent_budget` (`K - K_out`), `marginal_roi_at_optimum`
 (`mu*`; `0` when the caps absorb the budget), `t_bar`, `t_roi_cap`,
 `t_bar_eff`, `negative_roi` (`Z_0`), `capped_by_roi`, `capped_by_support`,
+`threshold_roi_type`,
 and the counts `n_units`, `n_units_excluded_negative_roi`,
 `n_units_capped_by_roi`, `n_units_at_support_cap`; `budget_k`,
 `budget_k_prime`, `unspent_budget` and `marginal_roi_at_optimum` are `NaN`
-under `roi_target`. Raises `ValueError` for an unknown `budget_mode`, a
-negative threshold, or `roi_target` with `threshold_roi = 0`.
+under `roi_target`. Raises `ValueError` for an unknown `budget_mode` or
+`threshold_roi_type`, a negative threshold, or `roi_target` with
+`threshold_roi = 0`.
 

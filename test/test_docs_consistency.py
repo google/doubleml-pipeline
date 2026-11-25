@@ -654,6 +654,12 @@ class MarkdownExamplesTest(unittest.TestCase):
     self.assertIn(
         config["optimization"]["budget_mode"], optimization.BUDGET_MODES
     )
+    self.assertEqual(
+        config["optimization"]["threshold_roi_type"],
+        inspect.signature(optimization.optimize_saturation)
+        .parameters["threshold_roi_type"]
+        .default,
+    )
 
 
 class CrossReferenceTest(unittest.TestCase):

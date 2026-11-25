@@ -1094,6 +1094,28 @@ class NormalizedAllocatorTest(unittest.TestCase):
               after_roi, before_roi, rtol=1e-6, atol=1e-7
           )
 
+  def test_marginal_roi_cap_is_unchanged_by_the_normalization(self):
+    """``theta_bar fbar' = theta_raw f'``: the marginal-ROI cap is invariant."""
+    r = 0.02
+    for family, alpha in _FAMILY_ALPHAS:
+      kappa = float(
+          saturation.apply_saturation(np.array([self.t_ref]), family, alpha)[0]
+      )
+      slope0 = float(saturation.marginal_effect_at_zero(family, alpha))
+      # The units whose first unit of spend earns more than r.
+      funded = np.array([th > 0 and th * slope0 > r for th in self.theta_raw])
+      for t_upper in (None, self.t_max):
+        with self.subTest(family=family, t_upper=t_upper):
+          before = saturation.marginal_roi_cap(
+              family, alpha, self.theta_raw, r, t_upper=t_upper
+          )
+          after = saturation.marginal_roi_cap(
+              family, alpha, self.theta_raw * kappa, r, t_ref=self.t_ref,
+              t_upper=t_upper,
+          )
+          np.testing.assert_allclose(after, before, rtol=1e-9)
+          np.testing.assert_array_equal(before > 0.0, funded)
+
   def test_tanh_kkt_formula_with_kappa(self):
     """T*(mu) = (2/lambda) artanh sqrt(1 - 2 mu kappa / (lambda theta))."""
     lam, mu = 0.05, 0.01

@@ -717,7 +717,9 @@ their linear references),
   `simple_optimization=True` variant above, spend may *increase* at some units;
   the units are the rows of the optimization scope (`opt_geos` / `opt_items`)
   and every unit carries the cap `T_bar_t` (largest observed treatment in its
-  geo × item cell) and, when `opt_threshold_roi > 0`, the ROI cap `T_t^r`.
+  geo × item cell) and, when `opt_threshold_roi > 0`, the ROI cap `T_t^r` (the
+  largest spend at which the quantity named by `threshold_roi_type` is still
+  at least the threshold).
   Under `budget_mode = "fixed"` the budget is
   `K = (1 + budget_increment) * observed total` (with `budget_reallocate=false`
   the budget of excluded units is truncated instead of redistributed); under
@@ -738,6 +740,7 @@ Carries every column from the table above, plus:
 | `optimized_incremental_KPI_<treatment>` | `float64` | `141000.0` | Incremental KPI under the optimized allocation. |
 | `optimized_roi_<treatment>` | `float64` | `0.28` | ROI under the optimized allocation. |
 | `T_ref_raw` | `float64` | `312.5` | Reference point of `fbar` in raw treatment units (median over the aggregated rows). |
+| `threshold_roi_type` | `string` | `average` | Quantity of every unit that `threshold_roi` bounds from below: `average` (the ROI of the unit) or `marginal` (the ROI of its last unit of spend). A property of the whole problem. |
 | `budget_mode` | `string` | `fixed` | `fixed` or `roi_target` (a property of the whole problem). |
 | `budget_reallocate` | `bool` | `True` | Whether the budget of units excluded by the ROI threshold was redistributed (`fixed` mode only; empty otherwise). |
 | `reallocate_within` | `string` | `all` | Scope of the KKT problem: `all` (one problem over every allocation unit; spend moves across days, geos and items) or `date` (one problem per date with the per-date budget; no cross-day movement). |

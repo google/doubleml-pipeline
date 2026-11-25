@@ -810,15 +810,20 @@ def generate_html_report(output_dir: str) -> str | None:
             if col_name in df.columns and pd.notnull(row.get(col_name)):
               metrics[key][out_key] = float(row[col_name])
         # Keys whose values are free-form text; every other key is numeric.
-        string_keys = frozenset(
-            {"sat_family", "budget_mode", "reallocate_within", "assumptions"}
-        )
+        string_keys = frozenset({
+            "sat_family",
+            "budget_mode",
+            "threshold_roi_type",
+            "reallocate_within",
+            "assumptions",
+        })
         for out_key, col_name in [
             ("sat_family", "saturation_family"),
             ("alpha_hat", "alpha_hat"),
             ("budget_increment", "budget_increment"),
             # Optimization statistics shown in the descriptive block.
             ("budget_mode", "budget_mode"),
+            ("threshold_roi_type", "threshold_roi_type"),
             ("budget_K", "K"),
             ("budget_K_out", "K_out"),
             ("unspent_budget", "unspent_budget"),
@@ -1490,6 +1495,9 @@ def generate_html_report(output_dir: str) -> str | None:
                     }};
                     if (m.budget_mode !== undefined) {{
                         html += "<br><strong>Budget mode:</strong> " + m.budget_mode;
+                    }}
+                    if (m.threshold_roi_type !== undefined) {{
+                        html += "<br><strong>ROI threshold type (threshold_roi_type):</strong> " + m.threshold_roi_type + (m.threshold_roi_type === "marginal" ? " (the marginal ROI of every unit is at least the threshold)" : " (the ROI of every unit is at least the threshold)");
                     }}
                     if (m.budget_K !== undefined) {{
                         html += "<br><strong>Budget K:</strong> " + fmtOpt(m.budget_K);

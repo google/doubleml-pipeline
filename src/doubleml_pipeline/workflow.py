@@ -352,13 +352,15 @@ _CONFIG_KEYS = {
     "final_fit": frozenset({"data"}),
     # budget_mode / budget_reallocate join budget_increment; cap_quantile
     # (support cap quantile, default 1.0) and reallocate_within
-    # ("all" | "date") are the allocation-scope settings.
+    # ("all" | "date") are the allocation-scope settings; threshold_roi_type
+    # ("average" | "marginal") names what opt_threshold_roi bounds.
     "optimization": frozenset({
         "budget_increment",
         "budget_mode",
         "budget_reallocate",
         "cap_quantile",
         "reallocate_within",
+        "threshold_roi_type",
     }),
 }
 # `mode`, `c_min`, `c_max` and `max_extensions` configure the automatic grid;
@@ -519,6 +521,14 @@ def _validate_config(saturation_config: Dict[str, Any]) -> None:
     raise ValueError(
         "optimization.reallocate_within must be one of"
         f" {list(optimization.REALLOCATE_WITHIN)} (got '{within}')."
+    )
+  roi_type = optimization_cfg.get("threshold_roi_type")
+  if roi_type is not None and str(roi_type).strip().lower() not in (
+      optimization.THRESHOLD_ROI_TYPES
+  ):
+    raise ValueError(
+        "optimization.threshold_roi_type must be one of"
+        f" {list(optimization.THRESHOLD_ROI_TYPES)} (got '{roi_type}')."
     )
 
 
@@ -821,6 +831,14 @@ class CausalWorkflowOrchestrator:
         .strip()
         .lower()
     )
+    # threshold_roi_type: opt_threshold_roi bounds the ROI of every unit
+    # ("average", default) or its marginal ROI ("marginal"); validated by
+    # _validate_config above.
+    self.threshold_roi_type = (
+        str(optimization_cfg.get("threshold_roi_type", "average") or "average")
+        .strip()
+        .lower()
+    )
 
     # This validation runs at Orchestrator initialization, i.e. strictly
     # BEFORE the Phase 0 / Stage A computation.
@@ -904,8 +922,9 @@ class CausalWorkflowOrchestrator:
         opt_threshold_roi, bool
     ):
       raise ValueError("opt_threshold_roi must be a numeric value.")
-    # The ROI threshold is a constraint ROI_t >= r
-    # with r >= 0; a negative threshold is rejected at initialization.
+    # The ROI threshold r is a lower bound (on the ROI of every unit or, with
+    # threshold_roi_type = "marginal", on its marginal ROI) with r >= 0; a
+    # negative threshold is rejected at initialization.
     if float(opt_threshold_roi) < 0.0:
       raise ValueError(
           f"opt_threshold_roi must be >= 0 (got {opt_threshold_roi})."
@@ -5115,6 +5134,7 @@ class CausalWorkflowOrchestrator:
                 f" scale, T_ref={self._t_ref_for(d_col):.6g},"
                 f" budget_mode={self.budget_mode},"
                 f" threshold_roi={float(self.opt_threshold_roi):g},"
+                f" threshold_roi_type={self.threshold_roi_type},"
                 f" cap_quantile={self.cap_quantile:g},"
                 f" reallocate_within={self.reallocate_within}; no carryover"
                 " is modelled: spend moves across the allocation units"
@@ -5135,6 +5155,7 @@ class CausalWorkflowOrchestrator:
             self._phase4_optimization.setdefault(d_col, {}).update({
                 "budget_mode": self.budget_mode,
                 "budget_reallocate": self.budget_reallocate,
+                "threshold_roi_type": self.threshold_roi_type,
                 "cap_quantile": self.cap_quantile,
                 "reallocate_within": self.reallocate_within,
                 "assumptions": "no_carryover",
@@ -5165,6 +5186,7 @@ class CausalWorkflowOrchestrator:
                 opt_items=self.opt_items,
                 cap_quantile=self.cap_quantile,
                 reallocate_within=self.reallocate_within,
+                threshold_roi_type=self.threshold_roi_type,
                 date_col=self.date_col,
                 geo_col=self.geo_col,
                 item_col=getattr(self, "item_col", None),
@@ -5817,6 +5839,7 @@ class CausalWorkflowOrchestrator:
         "budget_increment": self.budget_increment,
         "budget_mode": self.budget_mode,
         "budget_reallocate": self.budget_reallocate,
+        "threshold_roi_type": self.threshold_roi_type,
         "opt_geos": self.opt_geos,
         "opt_items": self.opt_items,
     }

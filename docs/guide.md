@@ -892,7 +892,7 @@ Details:
 | `optimize` | `simple_optimization` | Saturation family | Behaviour |
 | :--- | :--- | :--- | :--- |
 | `True` | `True` | any | **Simple**: inside `opt_periods`, every row whose ROI is below `opt_threshold_roi` has its spend cut; the freed budget is reported as an increase of `opt_other_cost_variables`. |
-| `True` | `False` *(derived when a family is set)* | required | **Saturation-aware**: reallocates the budget across rows along the fitted curves so that marginal ROIs equalize, subject to `ROI ≥ r` per unit ([details](saturation.md#saturation-aware-optimization)). |
+| `True` | `False` *(derived when a family is set)* | required | **Saturation-aware**: reallocates the budget across rows along the fitted curves so that marginal ROIs equalize, subject to `ROI ≥ r` per unit (`marginal ROI ≥ r` with `optimization.threshold_roi_type = "marginal"`; [details](saturation.md#saturation-aware-optimization)). |
 | `True` | `False` (explicit) | none | `ValueError` at construction — a linear model has no interior optimum. |
 | `True` | any | any, non-`spend` treatment | forced to the simple optimizer with a warning. |
 

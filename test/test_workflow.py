@@ -21,10 +21,10 @@
   every block and the rejection of unknown / retired keys and out-of-range
   values.
 * The optimization settings: ``opt_threshold_roi``, ``budget_mode`` /
-  ``budget_reallocate``, ``cap_quantile`` / ``reallocate_within``, ``opt_geos``
-  / ``opt_items``, the treatment-lag (no carryover) warning and the fact that
-  an explicit ``simple_optimization=False`` is never rewritten at
-  initialization.
+  ``budget_reallocate``, ``threshold_roi_type``, ``cap_quantile`` /
+  ``reallocate_within``, ``opt_geos`` / ``opt_items``, the treatment-lag (no
+  carryover) warning and the fact that an explicit
+  ``simple_optimization=False`` is never rewritten at initialization.
 * The ``hparam_policy`` argument, the worker / thread allocation of the
   parallel plan and the joblib parallel section.
 * ``_model_group_label``: FLAML learner names that contain an underscore
@@ -759,6 +759,43 @@ class OptimizationSettingsTest(unittest.TestCase):
     for bad in ({"cap_quantile": 0.0}, {"cap_quantile": 1.5},
                 {"cap_quantile": "0.9"}, {"cap_quantile": True},
                 {"reallocate_within": "week"}, {"cap_quantil": 0.9}):
+      with self.subTest(bad=bad):
+        with self.assertRaises(ValueError):
+          workflow.CausalWorkflowOrchestrator(
+              optimize=True,
+              saturation_config={
+                  "saturation": {"family": "tanh"},
+                  "optimization": bad,
+              },
+              **self._kwargs(),
+          )
+
+  def test_threshold_roi_type_setting(self):
+    """Default "average", case-insensitive parsing and validation."""
+    # Without a saturation_config the attribute carries the default too.
+    orch = workflow.CausalWorkflowOrchestrator(**self._kwargs())
+    self.assertEqual(orch.threshold_roi_type, "average")
+    for given, want in (
+        (None, "average"),
+        ("average", "average"),
+        ("marginal", "marginal"),
+        (" Marginal ", "marginal"),
+    ):
+      with self.subTest(given=given):
+        orch = workflow.CausalWorkflowOrchestrator(
+            optimize=True,
+            saturation_config={
+                "saturation": {"family": "tanh"},
+                "optimization": {"threshold_roi_type": given},
+            },
+            **self._kwargs(),
+        )
+        self.assertEqual(orch.threshold_roi_type, want)
+    for bad in (
+        {"threshold_roi_type": "median"},
+        {"threshold_roi_type": True},
+        {"threshold_roi_typ": "marginal"},
+    ):
       with self.subTest(bad=bad):
         with self.assertRaises(ValueError):
           workflow.CausalWorkflowOrchestrator(

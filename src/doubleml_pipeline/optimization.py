@@ -54,21 +54,23 @@ The saturation-aware part
   date) inside ``opt_periods`` and ``opt_geos x opt_items``; the cap
   ``T_bar_t`` = maximum actual treatment within the unit's geo x item cell;
   the ROI threshold ``r = opt_threshold_roi`` as the per-unit cap ``T_t^r``
-  (``ROI_t(T) = theta_t fbar(T) / T >= r``), ``T_bar_t^eff = min(T_bar_t,
-  T_t^r)``; ``budget_mode`` ``fixed`` (``K = (1 + budget_increment) x actual
-  total``, one KKT pass with a single bisection on ``mu``;
-  ``budget_reallocate`` chooses between ``K' = K`` with ``T_bar_t^eff`` and
-  ``K' = K_+`` with ``T_bar_t`` followed by the truncation ``min(T^(1),
-  T_t^r)``) and ``roi_target`` (``T_t* = T_bar_t^eff``, no budget).  The
-  former greedy "exclude below the threshold -> re-solve -> iterate" loop
-  no longer exists (:func:`allocate_saturation_budget`);
+  (``threshold_roi_type`` ``average``: ``ROI_t(T) = theta_t fbar(T) / T >=
+  r``; ``marginal``: ``theta_t fbar'(T) >= r``), ``T_bar_t^eff =
+  min(T_bar_t, T_t^r)``; ``budget_mode`` ``fixed`` (``K = (1 +
+  budget_increment) x actual total``, one KKT pass with a single bisection
+  on ``mu``; ``budget_reallocate`` chooses between ``K' = K`` with
+  ``T_bar_t^eff`` and ``K' = K_+`` with ``T_bar_t`` followed by the
+  truncation ``min(T^(1), T_t^r)``) and ``roi_target`` (``T_t* =
+  T_bar_t^eff``, no budget).  The former greedy "exclude below the threshold
+  -> re-solve -> iterate" loop no longer exists
+  (:func:`allocate_saturation_budget`);
 * writes the additional columns of
   ``consolidated_1a_full_df.csv``;
 * writes ``optimization_metrics.csv`` including the incremental-KPI / ROI
   columns next to the actual and optimized total cost, and the statistics
-  ``budget_mode``, ``K``, ``K_out``, ``unspent_budget``,
-  ``marginal_roi_at_optimum``, ``n_units_excluded_negative_roi``,
-  ``n_units_capped_by_roi``;
+  ``threshold_roi_type``, ``budget_mode``, ``K``, ``K_out``,
+  ``unspent_budget``, ``marginal_roi_at_optimum``,
+  ``n_units_excluded_negative_roi``, ``n_units_capped_by_roi``;
 * draws the charts.  Each dimension (every geo, every
   item and the total) gets two two-line charts --
   ``*_original_vs_optimal_treatment.png`` (purple original vs green optimal
@@ -1081,6 +1083,13 @@ def compute_budget(
 # saturation_config['optimization']['budget_mode'].
 BUDGET_MODES = ("fixed", "roi_target")
 
+# The enumerated values of saturation_config['optimization']
+# ['threshold_roi_type']: the quantity of every unit that the ROI threshold
+# r = opt_threshold_roi bounds from below.  "average" = the ROI of the unit,
+# theta_t fbar(T) / T (saturation.roi_cap); "marginal" = the ROI of its last
+# unit of spend, theta_t fbar'(T) (saturation.marginal_roi_cap).
+THRESHOLD_ROI_TYPES = ("average", "marginal")
+
 # Default of saturation_config['optimization']['cap_quantile']: the support
 # cap T_bar_t is the q-quantile of the POSITIVE actual treatment within the
 # unit's geo x item cell, floored at the unit's own actual treatment,
@@ -1114,13 +1123,15 @@ class SaturationAllocation:
     marginal_roi_at_optimum: ``mu*`` of the KKT solve; NaN under ``roi_target``
       (and 0 when every unit sits at its cap).
     t_bar: The support caps ``T_bar_t``.
-    t_roi_cap: The ROI caps ``T_t^r`` (``inf`` where the threshold does not
-      bind).
+    t_roi_cap: The ROI caps ``T_t^r`` of ``threshold_roi_type`` (``inf`` where
+      the threshold does not bind).
     t_bar_eff: ``min(T_bar_t, T_t^r)``.
     negative_roi: ``Z_0 = {t : theta_t <= 0}``.
     capped_by_roi: Units with ``T_t* = T_t^r``.
     capped_by_support: Units with ``T_t* = T_bar_t`` (the support cap binds;
       ``theta_t > 0``).
+    threshold_roi_type: ``"average"`` or ``"marginal"``: the quantity that the
+      ROI threshold bounds (see :func:`allocate_saturation_budget`).
     n_units: Number of allocation units.
     n_units_excluded_negative_roi: Number of units in ``Z_0`` (``theta_t <=
       0``), i.e. the count of ``negative_roi``.
@@ -1145,6 +1156,7 @@ class SaturationAllocation:
   capped_by_support: np.ndarray = dataclasses.field(
       default_factory=lambda: np.zeros(0, dtype=bool)
   )
+  threshold_roi_type: str = "average"
 
   @property
   def n_units(self) -> int:
@@ -1174,6 +1186,7 @@ def allocate_saturation_budget(
     budget_mode: str = "fixed",
     budget_increment: float = 0.0,
     budget_reallocate: bool = True,
+    threshold_roi_type: str = "average",
 ) -> SaturationAllocation:
   """The saturation-aware KKT allocation (array level).
 
@@ -1186,6 +1199,21 @@ def allocate_saturation_budget(
   ``T_bar_t^eff = min(T_bar_t, T_t^r)``, ``Z_0 = {t : theta_t <= 0}``,
   ``K = (1 + b) sum_t T_t^actual`` (all units),
   ``K_+ = (1 + b) sum_{t not in Z_0} T_t^actual``.
+
+  ``threshold_roi_type`` names the quantity of a unit that must stay ``>= r``;
+  the ROI cap ``T_t^r`` is the largest spend at which it does:
+
+  * ``"average"`` (default): the ROI of the unit, ``theta_t fbar(T) / T``
+    (:func:`saturation.roi_cap`).
+  * ``"marginal"``: the ROI of the last unit of spend, ``theta_t fbar'(T)``
+    (:func:`saturation.marginal_roi_cap`).  ``T_t^r`` then maximizes
+    ``theta_t fbar(T) - r T``, so ``roi_target`` maximizes ``sum_t (theta_t
+    fbar(T_t) - r T_t)`` on ``0 <= T_t <= T_bar_t`` and ``fixed`` with
+    ``budget_reallocate = True`` maximizes it within the budget ``K``.  This
+    cap is never above the ``"average"`` one, so the ROI of every funded unit
+    is ``>= r`` under both types.
+
+  The budget modes use ``T_t^r`` in the same way under both types:
 
   * ``budget_mode = "fixed"``, ``budget_reallocate = True`` (default):
     ``K' = K``; one KKT solve with caps ``T_bar_t^eff``.
@@ -1208,19 +1236,26 @@ def allocate_saturation_budget(
     budget_mode: ``"fixed"`` | ``"roi_target"``.
     budget_increment: ``b >= -1`` (fixed only).
     budget_reallocate: See above (fixed only; default: ``True``).
+    threshold_roi_type: ``"average"`` (default) | ``"marginal"``; see above.
 
   Returns:
     The :class:`SaturationAllocation`.
 
   Raises:
-    ValueError: On an unknown ``budget_mode``, a negative threshold, or
-      ``roi_target`` with ``threshold_roi = 0``.
+    ValueError: On an unknown ``budget_mode`` or ``threshold_roi_type``, a
+      negative threshold, or ``roi_target`` with ``threshold_roi = 0``.
   """
   mode = str(budget_mode or "fixed").strip().lower()
   if mode not in BUDGET_MODES:
     raise ValueError(
         f"budget_mode must be one of {list(BUDGET_MODES)} (got"
         f" '{budget_mode}')."
+    )
+  roi_type = str(threshold_roi_type or "average").strip().lower()
+  if roi_type not in THRESHOLD_ROI_TYPES:
+    raise ValueError(
+        f"threshold_roi_type must be one of {list(THRESHOLD_ROI_TYPES)} (got"
+        f" '{threshold_roi_type}')."
     )
   r = float(threshold_roi)
   if r < 0.0:
@@ -1239,10 +1274,13 @@ def allocate_saturation_budget(
   t_bar_arr = np.where(np.isfinite(t_bar_arr), np.maximum(t_bar_arr, 0.0), 0.0)
   negative = theta <= 0.0
 
-  # The ROI cap T_t^r and the effective cap.
-  t_roi = saturation.roi_cap(
-      family, alpha, theta, r, t_ref=t_ref, t_upper=t_bar_arr
+  # The ROI cap T_t^r of the threshold type and the effective cap.
+  cap_fn = (
+      saturation.marginal_roi_cap
+      if roi_type == "marginal"
+      else saturation.roi_cap
   )
+  t_roi = cap_fn(family, alpha, theta, r, t_ref=t_ref, t_upper=t_bar_arr)
   t_roi = np.where(negative, 0.0, t_roi)
   t_bar_eff = np.minimum(t_bar_arr, t_roi)
 
@@ -1303,6 +1341,7 @@ def allocate_saturation_budget(
       negative_roi=negative,
       capped_by_roi=capped,
       capped_by_support=at_support,
+      threshold_roi_type=roi_type,
   )
 
 
@@ -1380,6 +1419,7 @@ def optimize_saturation(
     opt_items: Optional[Sequence[Any]] = None,
     cap_quantile: float = DEFAULT_CAP_QUANTILE,
     reallocate_within: str = "all",
+    threshold_roi_type: str = "average",
     **kwargs,
 ) -> pd.DataFrame:
   """Runs the saturation-aware optimization and writes the Phase 4 outputs.
@@ -1396,7 +1436,8 @@ def optimize_saturation(
   with ``Q_q`` the ``cap_quantile``-quantile of the positive actual treatment
   within its geo x item cell over the whole frame (``q = 1``: the cell
   maximum; :func:`_cell_cap`); the ROI threshold is the per-unit cap
-  ``T_t^r``; the problem is solved in one KKT pass by
+  ``T_t^r`` on the ROI of the unit or on its marginal ROI
+  (``threshold_roi_type``); the problem is solved in one KKT pass by
   :func:`allocate_saturation_budget` (``reallocate_within = "all"``) or in
   one KKT pass per date with the per-date budget ``K_d = (1 + b) sum_{t in d}
   T_t^actual`` (``reallocate_within = "date"``: spend moves across geos and
@@ -1452,6 +1493,10 @@ def optimize_saturation(
     reallocate_within: ``"all"`` (default: one KKT problem over all units) |
       ``"date"`` (one KKT problem per date with the per-date budget; no
       cross-day movement).  ``optimization.reallocate_within``.
+    threshold_roi_type: ``"average"`` (default: the ROI of every unit is
+      ``>= r``) | ``"marginal"`` (the marginal ROI of every unit is ``>= r``);
+      see :func:`allocate_saturation_budget`.
+      ``optimization.threshold_roi_type``.
     **kwargs: ``date_col``, ``geo_col``, ``item_col``, ``sales_col``,
       ``out_dir``.
 
@@ -1459,8 +1504,8 @@ def optimize_saturation(
     A copy of ``df_1a_consolidated`` carrying the ``optimized_*`` columns.
 
   Raises:
-    ValueError: On an unknown ``budget_mode`` / ``reallocate_within`` or a
-      ``cap_quantile`` outside ``(0, 1]``.
+    ValueError: On an unknown ``budget_mode`` / ``reallocate_within`` /
+      ``threshold_roi_type`` or a ``cap_quantile`` outside ``(0, 1]``.
   """
   other_cost_variables = list(other_cost_variables or [])
   date_col = kwargs.get("date_col", "Date")
@@ -1478,6 +1523,12 @@ def optimize_saturation(
     raise ValueError(
         f"reallocate_within must be one of {list(REALLOCATE_WITHIN)} (got"
         f" '{reallocate_within}')."
+    )
+  roi_type = str(threshold_roi_type or "average").strip().lower()
+  if roi_type not in THRESHOLD_ROI_TYPES:
+    raise ValueError(
+        f"threshold_roi_type must be one of {list(THRESHOLD_ROI_TYPES)} (got"
+        f" '{threshold_roi_type}')."
     )
 
   kpi_col = f"estimated_incremental_KPI_{treatment}"
@@ -1590,6 +1641,7 @@ def optimize_saturation(
         budget_mode=mode,
         budget_increment=budget_increment,
         budget_reallocate=budget_reallocate,
+        threshold_roi_type=roi_type,
     )
     t_opt[group_idx] = group_result.allocation
     group_results.append((group_idx, group_result))
@@ -1730,6 +1782,9 @@ def optimize_saturation(
           ),
           "periods_end_date": periods[1] if periods else str(end_date.date()),
           "threshold_roi": threshold_roi,
+          # What the threshold bounds: the ROI of every unit ("average") or
+          # its marginal ROI ("marginal").
+          "threshold_roi_type": roi_type,
           "saturation_family": family,
           "alpha_hat": float(sub_alpha.median()),
           # Equal to alpha_hat unless the normalization made alpha_i vary.

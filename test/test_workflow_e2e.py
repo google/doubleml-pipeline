@@ -28,6 +28,8 @@
   reach the saturation-aware optimizer.
 * The Phase 4 linear fallback when Phase 0 decides "linear".
 * The ``geo=6, daily, no item_col`` cell-level split case.
+* ``optimization.threshold_roi_type = "marginal"`` reaches the saturation-aware
+  optimizer, the allocation and every output that names the setting.
 * The unique-index guard fails fast before any phase runs.
 
 The other full-pipeline runs of the test suite are the spec acceptance tests
@@ -1227,6 +1229,7 @@ class SaturationEndToEndTest(unittest.TestCase):
           metrics[["alpha_hat_min", "alpha_hat_max"]],
       )
       self.assertTrue((metrics["threshold_roi"] == 1.0).all())
+      self.assertTrue((metrics["threshold_roi_type"] == "average").all())
       self.assertTrue(metrics["budget_reallocate"].astype(bool).all())
       # Allocation-scope defaults and the stated premise.
       self.assertTrue((metrics["cap_quantile"] == 1.0).all())
@@ -1524,6 +1527,123 @@ class GeoSixDailyEndToEndTest(unittest.TestCase):
       self.assertFalse(folds.duplicated(["seed", "cluster_id"]).any())
       self.assertEqual(folds.groupby("seed")["cluster_id"].nunique().iloc[0],
                        6 * 10)
+
+
+class MarginalThresholdEndToEndTest(unittest.TestCase):
+  """``threshold_roi_type = "marginal"`` from the config to every output.
+
+  The ``power`` family has ``fbar'(T) = alpha fbar(T) / T``, so a marginal ROI
+  of ``r`` is an ROI of ``r / alpha``.  Under ``roi_target`` every row funded
+  below its support cap therefore shows ``optimized_roi = r / alpha``, where
+  the default ``"average"`` would show ``r``.
+
+  FLAML is patched with ``helpers.deterministic_fit``.
+  """
+
+  def test_marginal_type_reaches_the_optimizer_and_the_outputs(self):
+    """The setting drives the allocation and is named in every output."""
+    r = 0.2
+    df = make_panel(n_geo=6, n_periods=30)
+    # One base level for every geo and little noise (make_panel draws a base
+    # per geo), so that the effect of the spend is estimated closely.
+    df["sales"] = (
+        100.0
+        + 2.0 * np.sqrt(df["spend"])
+        + 3.0 * df["X1"]
+        - 1.5 * df["X2"]
+        + np.random.default_rng(1).normal(0.0, 0.5, len(df))
+    )
+    log = io.StringIO()
+    with tempfile.TemporaryDirectory() as out_dir:
+      scaler = scalers.CausalDataScaler(
+          median_normalize_cols=["spend"],
+          standardize_cols=["X1", "X2", "sales"],
+          population_col="population",
+      )
+      orch = workflow.CausalWorkflowOrchestrator(
+          y_col="sales",
+          d_cols=["spend"],
+          x_cols_list=[["X1", "X2"]],
+          ml_models_y=["rf"],
+          ml_models_t=["rf"],
+          n_folds_list=[3],
+          output_dir=out_dir,
+          covariates_for_cate_list=[["X1"]],
+          time_budget=1,
+          n_jobs=1,
+          hparam_policy="per_fold",
+          date_col="date",
+          geo_col="geo",
+          item_col="item",
+          run_sensitivity=False,
+          generate_html=False,
+          treatment_types={"spend": "spend"},
+          treatment_spend_cols={"spend": "spend"},
+          sales_col="sales",
+          optimize=True,
+          opt_threshold_roi=r,
+          saturation_config={
+              "saturation": {
+                  "family": "power",
+                  "grid": {"min": 0.2, "max": 0.8, "num": 5, "scale": "linear"},
+                  "basis_dim_T": 4,
+              },
+              "alpha_selection": {
+                  "n_seeds": 1,
+                  "k_folds": 2,
+                  "refine": "none",
+                  # Always adopt the family (see SaturationEndToEndTest for
+                  # the fixed fallback).
+                  "linear_test_k": -1e12,
+                  "fallback_half_saturation_T": 0.5,
+              },
+              "optimization": {
+                  "budget_mode": "roi_target",
+                  "threshold_roi_type": "Marginal",
+              },
+          },
+      )
+      self.assertEqual(orch.threshold_roi_type, "marginal")
+      with mock.patch.object(
+          flaml_dml.FlamlRegressorDoubleML, "fit", helpers.deterministic_fit
+      ), warnings.catch_warnings(), contextlib.redirect_stdout(log):
+        warnings.simplefilter("ignore")
+        orch.run_full_pipeline(df=df, scaler=scaler, top_n=1, n_reps=1)
+
+      out = pd.read_csv(helpers.find(out_dir, "consolidated_1a_full_df.csv"))
+      metrics = pd.read_csv(helpers.find(out_dir, "optimization_metrics.csv"))
+      with open(os.path.join(out_dir, "metadata.json"), encoding="utf-8") as fh:
+        metadata = json.load(fh)
+      report_path = html_extraction.generate_html_report(out_dir)
+      with open(report_path, encoding="utf-8") as fh:
+        html = fh.read()
+
+    # The setting: the Phase 4 log line, the metrics, the metadata, the report.
+    self.assertIn("threshold_roi_type=marginal", log.getvalue())
+    self.assertTrue((metrics["threshold_roi_type"] == "marginal").all())
+    self.assertTrue((metrics["budget_mode"] == "roi_target").all())
+    self.assertEqual(metadata["threshold_roi_type"], "marginal")
+    self.assertEqual(
+        metadata["phase4_optimization"]["spend"]["threshold_roi_type"],
+        "marginal",
+    )
+    self.assertIn('"threshold_roi_type": "marginal"', html)
+
+    # The allocation: an ROI of r / alpha below the support cap (the maximum
+    # spend of the geo x item cell) and at least that at the cap.
+    self.assertEqual(metrics["saturation_family"].iloc[0], "power")
+    alpha = float(metrics["alpha_hat"].iloc[0])
+    spend = out["optimized_spend"]
+    cell_max = out.groupby(["geo", "item"])["spend"].transform("max")
+    funded = spend > 1e-9
+    below_cap = funded & (spend < cell_max * (1 - 1e-9))
+    self.assertGreater(int(below_cap.sum()), len(out) // 2)
+    np.testing.assert_allclose(
+        out.loc[below_cap, "optimized_roi_spend"], r / alpha, rtol=1e-6
+    )
+    self.assertTrue(
+        (out.loc[funded, "optimized_roi_spend"] >= r / alpha * (1 - 1e-6)).all()
+    )
 
 
 def _make_minimal_panel(n_geo: int = 4, n_periods: int = 12, seed: int = 0):

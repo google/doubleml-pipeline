@@ -69,14 +69,15 @@ Treatment normalization (``fbar``, ``T_ref``, ``kappa``):
 * The KKT inversions carry the constant ``kappa = f(T_ref; alpha)``
   (``tanh(lambda T_ref / 2)`` for ``tanh``); the allocation itself is
   unchanged by the normalization.
-* The ROI threshold ``r`` is a per-unit cap ``T_t^r``
-  (``ROI_t(T) = theta_t fbar(T) / T >= r  <=>  T <= T_t^r``,
-  :func:`roi_cap`), the KKT inversion ``T_t*(mu) = clip((fbar')^-1(mu /
-  theta_t), 0, cap_t)`` takes per-unit caps (:func:`kkt_allocation`), and
-  the budget problem is solved by ONE bisection on ``mu``
-  (:func:`solve_budget_allocation`, which also returns ``mu*``).  The former
-  greedy "exclude below the threshold -> re-solve -> iterate" loop no longer
-  exists.
+* The ROI threshold ``r`` is a per-unit cap ``T_t^r``, either on the ROI of
+  the unit (``ROI_t(T) = theta_t fbar(T) / T >= r  <=>  T <= T_t^r``,
+  :func:`roi_cap`) or on its marginal ROI (``theta_t fbar'(T) >= r  <=>
+  T <= T_t^r``, :func:`marginal_roi_cap`).  The KKT inversion ``T_t*(mu) =
+  clip((fbar')^-1(mu / theta_t), 0, cap_t)`` takes per-unit caps
+  (:func:`kkt_allocation`), and the budget problem is solved by ONE
+  bisection on ``mu`` (:func:`solve_budget_allocation`, which also returns
+  ``mu*``).  The former greedy "exclude below the threshold -> re-solve ->
+  iterate" loop no longer exists.
 
 Stage B nuisance learners (``alpha_selection.learners``):
 
@@ -1603,6 +1604,66 @@ def roi_cap(
     if np.all(hi - lo <= tol * np.maximum(hi, 1.0)):
       break
   out[idx] = 0.5 * (lo + hi)
+  return out
+
+
+def marginal_roi_cap(
+    family: str,
+    alpha: Union[float, np.ndarray],
+    theta: np.ndarray,
+    threshold_roi: float,
+    t_ref: Optional[Union[float, np.ndarray]] = None,
+    t_upper: Optional[Union[float, np.ndarray]] = None,
+) -> np.ndarray:
+  """The marginal-ROI cap ``T_t^r`` of the saturation-aware optimizer.
+
+  The counterpart of :func:`roi_cap` for
+  ``optimization.threshold_roi_type = "marginal"``.  The marginal ROI
+  ``mROI_t(T) = theta_t fbar'(T)`` is strictly decreasing in ``T`` (``fbar``
+  is strictly concave), so ``mROI_t(T) >= r`` is equivalent to the upper bound
+  ``T <= T_t^r`` with
+
+  * ``T_t^r = inf`` when ``r = 0`` (no constraint),
+  * ``T_t^r = 0`` when ``theta_t fbar'(0) <= r`` (even the first unit of
+    spend is below the threshold),
+  * otherwise the closed form ``T_t^r = (fbar')^-1(r / theta_t)``
+    (:func:`kkt_allocation` with ``mu = r`` and no cap).
+
+  For ``r > 0``, ``T_t^r`` is the spend that maximizes
+  ``theta_t fbar(T) - r T`` over ``T >= 0``.  It is never above the cap of
+  :func:`roi_cap` for the same ``r``, because ``fbar(T) / T >= fbar'(T)``.
+
+  Args:
+    family: One of ``SUPPORTED_FAMILIES``.
+    alpha: The saturation parameter (scalar or one value per unit).
+    theta: ``theta_hat_t`` per unit (units of ``fbar``); units with
+      ``theta_t <= 0`` get ``T_t^r = 0``.
+    threshold_roi: ``r = opt_threshold_roi >= 0``.
+    t_ref: ``T_ref`` (scalar or per unit), or ``None`` for the raw ``f``.
+    t_upper: Optional bound per unit (normally the cap ``T_bar_t``).  When
+      ``mROI_t(t_upper) >= r`` the cap does not bind below ``t_upper`` and
+      ``+inf`` is returned for that unit instead of the exact root (the
+      effective cap ``min(T_bar_t, T_t^r)`` is unaffected), as in
+      :func:`roi_cap`.
+
+  Returns:
+    ``T_t^r`` per unit (``+inf`` where the threshold never binds).
+
+  Raises:
+    ValueError: If ``threshold_roi < 0``.
+  """
+  r = float(threshold_roi)
+  if r < 0.0:
+    raise ValueError(f"opt_threshold_roi must be >= 0 (got {threshold_roi}).")
+  theta = np.asarray(theta, dtype=float)
+  # With r = 0 the KKT inversion puts every unit with theta_t > 0 at its cap,
+  # which is +inf here.
+  out = kkt_allocation(family, alpha, theta, r, np.inf, t_ref)
+  if t_upper is not None:
+    upper = np.broadcast_to(np.asarray(t_upper, dtype=float), theta.shape)
+    # mROI_t is decreasing, so `root >= upper` is `mROI_t(upper) >= r`.
+    not_binding = np.isfinite(upper) & (upper > 0.0) & (out >= upper)
+    out = np.where(not_binding, np.inf, out)
   return out
 
 

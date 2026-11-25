@@ -146,8 +146,11 @@ orchestrator = CausalWorkflowOrchestrator(
         # Saturation-aware optimization. Note this lives
         # under `optimization`, not `saturation`.
         "optimization": {
-            # "fixed" (budget K) | "roi_target" (no budget; ROI >= r)
+            # "fixed" (budget K) | "roi_target" (no budget; threshold only)
             "budget_mode": "fixed",
+            # what opt_threshold_roi bounds for every unit: "average" (its
+            # ROI) | "marginal" (the ROI of its last unit of spend)
+            "threshold_roi_type": "average",
             # fixed only: K = (1 + x) * actual total of the target units
             "budget_increment": 0.0,
             # fixed only: redistribute what the ROI cap / negative units
@@ -187,10 +190,11 @@ The keys in detail:
 | `alpha_selection.flatness_ratio` | `10.0` | Diag2 fires when `T_1/2^max / T_1/2^min` over the 1-SE set `A_1SE = {alpha : L_bar(alpha) - L_bar(alpha_hat) <= se(alpha)}` exceeds this (`T_knee` for `log`; for `power` the fixed rule `alpha^max - alpha^min > 0.4`). Warning only when a family is adopted, INFO otherwise. |
 | `alpha_selection.t_ref_tolerance` | `1e-9` | Diag6: at the start of Phase 1 `T_ref` is recomputed from the treatment column Phase 1 receives; a relative error at or above this stops the run with an error (unit / hand-over bug). |
 | `optimization.budget_mode` | `"fixed"` | `fixed`: a budget `K` is given and the allocation is solved in one KKT pass. `roi_target`: no budget; every unit receives `min(T_bar_t, T_t^r)` (requires `opt_threshold_roi > 0`). |
+| `optimization.threshold_roi_type` | `"average"` | The quantity of every unit that `opt_threshold_roi = r` bounds from below; it defines the ROI cap `T_t^r`. `"average"`: the ROI of the unit, `theta_t fbar(T)/T >= r`. `"marginal"`: the ROI of its last unit of spend, `theta_t fbar'(T) >= r`. See the table under "Saturation-aware optimization" for what each type maximizes. |
 | `optimization.budget_reallocate` | `True` | `fixed` only. `True` (default): `K' = K`, solve once with the effective caps `min(T_bar_t, T_t^r)` (spend freed by negative-ROI units and the ROI cap is redistributed). `False`: `K' = K_+` (negative-ROI spend removed), solve with the caps `T_bar_t`, then cut to `T_t^r` without redistribution (`unspent_budget`). |
 | `optimization.cap_quantile` | `1.0` | `q` of the support cap `T_bar_t = max(Q_q(cell_t), T_t^actual)`: `Q_q` is the `q`-quantile of the **positive** actual treatment within the unit's geo × item cell (consistent with `T_ref = q95(T>0)`; zero-spend rows do not shift it), floored at the unit's own actual spend. `1.0` (default) is the cell maximum — today's behaviour, where one outlier day lifts the cap of every unit in its cell. With e.g. `0.95` the other units are capped at the 95 % point while the outlier day keeps its own spend as its cap: it is never increased, but may still be reduced by the KKT condition or the ROI cap like any unit. Must be in `(0, 1]`. |
 | `optimization.reallocate_within` | `"all"` | Scope of the KKT problem. `"all"`: one problem over every allocation unit (spend moves across days, geos and items; today's behaviour). `"date"`: one problem per date with the per-date budget `K_d = (1 + budget_increment) * sum_{t in d} T_t^actual` — no cross-day movement; `mu*` becomes per date (median with `marginal_roi_at_optimum_min` / `_max` in `optimization_metrics.csv`). See the no-carryover note under "Saturation-aware optimization". |
-| `opt_threshold_roi` (top level) | `1.0` | ROI floor `r >= 0`, applied per row across both `simple_optimization=True` and `False` (including `budget_mode='roi_target'`). |
+| `opt_threshold_roi` (top level) | `1.0` | ROI floor `r >= 0`, applied per row across both `simple_optimization=True` and `False` (including `budget_mode='roi_target'`). The saturation-aware optimizer applies it to the ROI or to the marginal ROI of a row, as `optimization.threshold_roi_type` says. |
 | `opt_geos`, `opt_items` (top level) | `None` | Restrict the allocation units of the saturation-aware optimizer to these geos / items (`None` = all rows of the column). Rows outside keep their actual values in the `optimized_*` columns. |
 | `alpha_selection.learners` | see above | Fixed Stage B learners. `learner_selection: True` restores the legacy FLAML search. Without XGBoost >= 2.0 a warning is emitted and scikit-learn stand-ins are used: `HistGradientBoostingRegressor` for Y and one native multi-output `RandomForestRegressor` for T. |
 | `alpha_selection.output_dir` | `"step0_saturation"` | Sub-directory of `output_dir` that receives the Phase 0 files. |
@@ -398,13 +402,33 @@ default `q = 1.0` is the cell maximum, i.e. the historical cap; with
 by the KKT condition or the ROI cap but no unit is ever pushed above its cap —
 while every other unit is capped at the cell's 95 % point); the ROI threshold
 `r = opt_threshold_roi` is a per-unit cap `T_t^r` (the root of
-`theta_t fbar(T)/T = r`; `0` when `theta_t fbar'(0) <= r`; `inf` when
-`r = 0`), `T_bar_t^eff = min(T_bar_t, T_t^r)`; units with `theta_t <= 0`
+`theta_t fbar(T)/T = r` under `optimization.threshold_roi_type = "average"`,
+the default, and of `theta_t fbar'(T) = r` under `"marginal"`; `0` when
+`theta_t fbar'(0) <= r`; `inf` when `r = 0`),
+`T_bar_t^eff = min(T_bar_t, T_t^r)`; units with `theta_t <= 0`
 receive `0`. `T_t*(mu) = clip((fbar')^-1(mu / theta_t), 0, T_bar_t^eff)` with
 the closed forms of all four families and a single bisection on `mu` so that
 `sum_t T_t*(mu) = K'` (`mu* = 0` when the caps absorb the budget). The former
 "exclude below the threshold → re-solve → iterate" loop no longer exists.
 `budget_mode = roi_target` skips the budget and sets `T_t* = T_bar_t^eff`.
+
+`budget_mode` and `threshold_roi_type` together name what the allocation
+maximizes (`budget_reallocate = True`):
+
+| `threshold_roi_type` | `budget_mode = "roi_target"` (no budget) | `budget_mode = "fixed"` (budget `K`) |
+| :--- | :--- | :--- |
+| `"average"` | The largest spend at which the ROI of every unit is `>= r`. | The largest incremental KPI within `K` at which the ROI of every unit is `>= r`. |
+| `"marginal"` | The largest `sum_t (theta_t fbar(T_t) - r T_t)`. | The largest `sum_t (theta_t fbar(T_t) - r T_t)` within `K`; part of `K` stays unspent when the marginal caps cost less. |
+
+`sum_t (theta_t fbar(T_t) - r T_t)` is the incremental profit when a unit of
+spend pays for itself at a KPI of `r` (for a revenue KPI, `r = 1 / gross
+margin`): `"marginal"` funds a unit only while one more unit of spend still
+earns `r`. Its cap is never above the `"average"` one (`fbar(T)/T >= fbar'(T)`),
+so the ROI of every funded unit, and of the total, is `>= r` under both types.
+Under `fixed` the two types give the same allocation unless the budget exceeds
+the spend of `roi_target` with `"marginal"`: up to there the budget binds at a
+common marginal ROI `mu* >= r`, where neither cap binds.
+
 When Phase 0 selected `selected_family = None` the pipeline falls back to the
 existing (simple) optimizer with a warning; with several treatments **no**
 optimizer runs at all (`Optimization with multiple treatments is not yet
@@ -435,15 +459,16 @@ initialization.
 The saturation optimizer additionally writes `optimized_incremental_KPI_<t>` and
 `optimized_roi_<t>` into the consolidated CSV and into
 `007_optimization/optimization_metrics.csv`, where every geo / item / `all`
-row also carries `budget_mode`, `budget_reallocate`, `reallocate_within`,
-`cap_quantile`, `assumptions` (`no_carryover`), `K`, `K_out`,
-`unspent_budget`, `marginal_roi_at_optimum` (`mu*`; with
+row also carries `threshold_roi_type`, `budget_mode`, `budget_reallocate`,
+`reallocate_within`, `cap_quantile`, `assumptions` (`no_carryover`), `K`,
+`K_out`, `unspent_budget`, `marginal_roi_at_optimum` (`mu*`; with
 `marginal_roi_at_optimum_min` / `_max`, equal to it under
 `reallocate_within = "all"`), `n_units`, `n_units_excluded_negative_roi`,
 `n_units_capped_by_roi` and `n_units_at_support_cap` (`K`, `K_out`,
 `unspent_budget` and the counts are aggregated over the units of that row, so
 a geo row can show a negative `unspent_budget` when budget was reallocated
-into it; `budget_mode`, the scope and `mu*` describe the whole problem). The
+into it; `threshold_roi_type`, `budget_mode`, the scope and `mu*` describe the
+whole problem). The
 same values appear in the HTML descriptive block of the `007_optimization`
 tab. When `treatment_type="spend"` it also writes, per geo, per item and for
 the total, the two-line chart `<prefix>_original_vs_optimal_treatment.png`
